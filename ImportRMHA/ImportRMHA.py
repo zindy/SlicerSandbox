@@ -18,35 +18,16 @@ from pathlib import Path
 #
 # ImportRMHA
 #
+# This code was adapted from
+# Development of a 3D Mouse Atlas Tool
+# for Improved Non-Invasive Imaging of
+# Orthotopic Mouse Models of
+# Pancreatic Cancer
+# Joseph Dalton Brook M.Sc. B.Sc. (Hons)
+# https://qmro.qmul.ac.uk/xmlui/bitstream/handle/123456789/72671/Brook_J_160002821_BCI_final_Edited.pdf?sequence=3
+# No license provided with the original code.
+#
 
-"""
-{'ObjectType': 'ROI',
- 'NDims': 3,
- 'BinaryData': True,
- 'BinaryDataByteOrderMSB': False,
- 'CompressedData': 'RLE',
- 'TransformMatrix': [-1, 0, 0, 0, -1, 0, 0, 0, -1],
- 'Offset': [0, 0, 0],
- 'CenterOfRotation': [0, 0, 0],
- 'AnatomicalOrientation': 'LPS',
- 'ElementSpacing': [0.020446, 0.020446, 0.020446],
- 'DimSize': [490, 490, 587],
- 'ElementType': numpy.uint8,
- 'ROI[1]': 'Vis:red:1:0:127:255',
- 'ROI[2]': 'Implant:yellow:0:0:127:255',
- 'ROI[3]': 'Upper Bone:green:0:0:127:255',
- 'ROI[4]': 'Lower Bone:blue:0:0:127:255',
- 'PatientsName': '',
- 'PatientID': '',
- 'StudyDescription': '',
- 'StudyDate': '',
- 'StudyTime': '',
- 'SeriesDescription': '',
- 'SeriesDate': '',
- 'SeriesTime': '',
- 'ReferenceUID': '',
- 'ElementDataFile': 'LOCAL'}
-"""
 def string_to_nums(s):
     if ' ' in s:
         ret = [float(v) if '.' in v else int(v) for v in s.split(' ')]
