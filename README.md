@@ -73,12 +73,13 @@ Probably you can find a parameter set that works for a large group of patients. 
 
 ## Characterize Transform Matrix
 
-It is often difficult to understand what a transform matrix is doing just by inspecting the numerical values.  All the information is in those 12 numbers, but not in an easily understood format. Characterize Transform Matrix module provides information on what a transformation matrix is doing.  For example, is it a rigid transformation or is there scaling?  If there is scaling, what are the scale factors and stretch directions?  Is there rotation?  If so, what is the axis of rotation and how much rotation occurs around that axis?  Alternatively, if we break down the rotation into a sequence of rotations around coordinate axes, what is the rotation about each axis?
+It is often difficult to understand what a transform matrix is doing just by inspecting the numerical values.  All the information is in those 12 numbers, but not in an easily understood format. Characterize Transform Matrix module provides information on what a transformation matrix is doing.  For example, is it a rigid transformation or is there scaling or reflection?  If there is scaling, what are the scale factors and stretch directions?  Is there rotation?  If so, what is the axis of rotation and how much rotation occurs around that axis?  Alternatively, if we break down the rotation into a sequence of rotations around coordinate axes, what is the rotation about each axis?
 
 ### How to use
 Open the module and select the transform node you want to know about.  An analysis such as the following will appear in the text box below:
 
 ```
+This transformation does not include a reflection.
 Scale factors and stretch directions (eigenvalues and eigenvectors of stretch matrix K):
   f0: +0.012% change in direction [1.00, 0.03, -0.08]
   f1: -2.843% change in direction [-0.08, -0.10, -0.99]
@@ -93,6 +94,7 @@ Lastly, this transformation translates, shifting:
   +194.2 mm in the R direction
   +73.4 mm in the A direction
   -1170.3 mm in the S direction
+The order of application of the decomposed operations is stretch, then rotate, then translate. A different order of transform application would generally lead to a different set of decomposition matrices.
 ```
 This analysis is for the matrix
 ```
@@ -102,7 +104,7 @@ This analysis is for the matrix
 0 0 0 1
 ```
 ### Some Decomposition Details
-This module uses polar decomposition to describe the components of a 4x4 transform matrix. The decomposition has the form: `H = T * R * K`, where `H` is the full homogeneous transformation matrix (with 0,0,0,1 as the bottom row), `T` is a translation-only matrix, `R` is a rotation-only matrix, and `K` is a stretch matrix. `K` can further be decomposed into three scale matrices, which can each be characterized by a stretch direction (an eigenvector) and a stretch factor (the associated eigenvalue). Points to be transformed are on the right, so the order of operations is stretching first, then rotation, then translation.
+This module uses polar decomposition to describe the components of a 4x4 transform matrix. The decomposition has the form: `H = T * F * R * K`, where `H` is the full homogeneous transformation matrix (with 0,0,0,1 as the bottom row), `T` is a translation-only matrix, `F` is a reflection-only matrix, `R` is a rotation-only matrix, and `K` is a stretch matrix. `K` can further be decomposed into three scale matrices, which can each be characterized by a stretch direction (an eigenvector) and a stretch factor (the associated eigenvalue). Points to be transformed are on the right, so the order of operations is stretching first, then rotation, then reflection, then translation.
 
 If you would like access to the decomposed components of the matrix, you can call the relevant logic function of this module as follows:
 ```
@@ -114,7 +116,8 @@ decompositionResults = CharacterizeTransformMatrix.CharacterizeTransformMatrixLo
 |Field Name| Description|
 | ----------- | ----------- |
 | textResults | a line by line list of the analysis text |
-| isRigid | boolean, true if largest strech % change is less that 0.1% |
+| isRigid | boolean, true if largest strech % change is less that 0.1% and if there is no reflection |
+| hasReflection | boolean, true if there is reflection |
 | scaleFactors | numpy vector of scale factors in eigendirections of stretch matrix (with a 4th element which is always 1) |
 |scaleDirections| list of 3 scale directions as 4 element vectors (4th element always 0)|
 |largestPercentChangeScale | largest scale factor as a percent change (100 * (scaleFactor-1)) |
@@ -126,6 +129,7 @@ decompositionResults = CharacterizeTransformMatrix.CharacterizeTransformMatrixLo
 |translationVector| 3-element vector of RAS translation|
 |translationOnlyMatrix| identitiy matrix with translation vector in 4th column|
 |rotationOnlyMatrix|4x4 rotation matrix `R` from the decomposition|
+|reflectionOnlyMatrix|4x4 reflection matrix `F` from the decomposition. This is the identity matrix if there is no reflection, and is `np.diag([-1,-1,-1,1])` if reflection is present|
 |stretchOnlyMatrix|4x4 stretch matrix `K` from the decomposition|
 |scaleMatrixList|list of three 4x4 symmetric (likely non-uniform) scale matrices (`S1*S2*S3=K`)|
 |stretchEigenvectorMatrix|4x4 matrix with the stretch direction eigenvectors as the first 3 columns|
@@ -166,6 +170,35 @@ How to use:
   - Make sure that in the description column `Segmentation` is selected (or `Volume` is selected and `Label` checkbox is checked)
   - Choose the loaded color table node in the options column (rightmost widget)
   - Click OK
+
+
+## ImportNumpyArray
+
+This module registers a file reader for numpy array (`.npy`, `.npz`).
+
+See https://numpy.org/devdocs/reference/generated/numpy.lib.format.html#npy-format
+
+The reader can read an array of 1 to 5 dimensions into an image represented by a specific MRML node.
+
+| Dimension | Axis order                         | MRML node                 |
+|-----------|------------------------------------|---------------------------|
+| 1D        | `I`                                | `vtkMRMLScalarVolumeNode` |
+| 2D        | `J`, `I`                           | `vtkMRMLScalarVolumeNode` |
+| 3D        | `K`, `J`, `I`                      | `vtkMRMLScalarVolumeNode` |
+| 4D        | `K`, `J`, `I`, `component`         | `vtkMRMLVectorVolumeNode` |
+| 5D        | `time`, `K`, `J`, `I`, `component` | `vtkMRMLSequenceNode`     |
+
+
+Notes:
+
+* User is responsible for setting the correct IJK to RAS matrix.
+
+* For the 4D and 5D cases, having the channel-last convention corresponds to the ITK/VTK memory layout and is different from the
+  convention used in `PyTorch` for [NCHW for 4D][NCHW] tensors/arrays and [NCDHW for 5D][NCDHW].
+
+[NCHW]: https://pytorch.org/docs/stable/generated/torch.nn.Conv2d.html#torch.nn.Conv2d
+[NCDHW]: https://pytorch.org/docs/stable/generated/torch.nn.Conv3d.html#torch.nn.Conv3d
+
 
 ## LoadRemoteFile
 

@@ -1,0 +1,862 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>ColorizeVolume</class>
+ <widget class="qMRMLWidget" name="ColorizeVolume">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>239</width>
+    <height>585</height>
+   </rect>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="ctkCollapsibleButton" name="inputsCollapsibleButton">
+     <property name="text">
+      <string>Inputs and Outputs</string>
+     </property>
+     <layout class="QFormLayout" name="formLayout_2">
+      <item row="0" column="0">
+       <widget class="QLabel" name="label">
+        <property name="text">
+         <string>Input volume:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="qMRMLNodeComboBox" name="inputScalarVolumeSelector">
+        <property name="toolTip">
+         <string>Pick the input to the algorithm.</string>
+        </property>
+        <property name="nodeTypes">
+         <stringlist notr="true">
+          <string>vtkMRMLScalarVolumeNode</string>
+         </stringlist>
+        </property>
+        <property name="showChildNodeTypes">
+         <bool>false</bool>
+        </property>
+        <property name="addEnabled">
+         <bool>false</bool>
+        </property>
+        <property name="removeEnabled">
+         <bool>false</bool>
+        </property>
+        <property name="editEnabled">
+         <bool>true</bool>
+        </property>
+        <property name="SlicerParameterName" stdset="0">
+         <string notr="true">inputScalarVolume</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="label_5">
+        <property name="text">
+         <string>Input segmentation:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="qMRMLNodeComboBox" name="inputSegmentationSelector">
+        <property name="toolTip">
+         <string>Result with inverted threshold will be written into this volume</string>
+        </property>
+        <property name="nodeTypes">
+         <stringlist notr="true">
+          <string>vtkMRMLSegmentationNode</string>
+         </stringlist>
+        </property>
+        <property name="addEnabled">
+         <bool>false</bool>
+        </property>
+        <property name="removeEnabled">
+         <bool>false</bool>
+        </property>
+        <property name="editEnabled">
+         <bool>true</bool>
+        </property>
+        <property name="SlicerParameterName" stdset="0">
+         <string notr="true">inputSegmentation</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="label_2">
+        <property name="text">
+         <string>Output color volume:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="qMRMLNodeComboBox" name="outputRgbaVolumeSelector">
+        <property name="toolTip">
+         <string>Pick the output to the algorithm.</string>
+        </property>
+        <property name="nodeTypes">
+         <stringlist notr="true">
+          <string>vtkMRMLVectorVolumeNode</string>
+         </stringlist>
+        </property>
+        <property name="showChildNodeTypes">
+         <bool>false</bool>
+        </property>
+        <property name="baseName">
+         <string>Colorized volume</string>
+        </property>
+        <property name="noneEnabled">
+         <bool>true</bool>
+        </property>
+        <property name="addEnabled">
+         <bool>true</bool>
+        </property>
+        <property name="removeEnabled">
+         <bool>true</bool>
+        </property>
+        <property name="editEnabled">
+         <bool>true</bool>
+        </property>
+        <property name="renameEnabled">
+         <bool>true</bool>
+        </property>
+        <property name="noneDisplay">
+         <string>(Create new volume)</string>
+        </property>
+        <property name="SlicerParameterName" stdset="0">
+         <string notr="true">outputRgbaVolume</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="ctkCollapsibleButton" name="advancedCollapsibleButton">
+     <property name="text">
+      <string>Advanced</string>
+     </property>
+     <property name="collapsed">
+      <bool>true</bool>
+     </property>
+     <property name="collapsedHeight">
+      <number>6</number>
+     </property>
+     <layout class="QFormLayout" name="formLayout_3">
+      <item row="0" column="0">
+       <widget class="QLabel" name="label_7">
+        <property name="text">
+         <string>Background opacity:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="ctkSliderWidget" name="backgroundOpacitySliderWidget">
+        <property name="toolTip">
+         <string>Opacity of regions outside all segments.</string>
+        </property>
+        <property name="singleStep">
+         <double>0.100000000000000</double>
+        </property>
+        <property name="pageStep">
+         <double>0.100000000000000</double>
+        </property>
+        <property name="minimum">
+         <double>0.000000000000000</double>
+        </property>
+        <property name="maximum">
+         <double>1.000000000000000</double>
+        </property>
+        <property name="value">
+         <double>0.500000000000000</double>
+        </property>
+        <property name="SlicerParameterName" stdset="0">
+         <string notr="true">backgroundOpacityPercent</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="label_3">
+        <property name="text">
+         <string>Soft edge:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="ctkSliderWidget" name="softEdgeSliderWidget">
+        <property name="enabled">
+         <bool>true</bool>
+        </property>
+        <property name="toolTip">
+         <string>Thickness of transition zone at segment edges. Increase it to make edges smoother and reduce edge artifacts (such as coloring or woodgrain pattern). Decrease it to get sharper edges.</string>
+        </property>
+        <property name="singleStep">
+         <double>0.100000000000000</double>
+        </property>
+        <property name="pageStep">
+         <double>1.000000000000000</double>
+        </property>
+        <property name="minimum">
+         <double>0.000000000000000</double>
+        </property>
+        <property name="maximum">
+         <double>5.000000000000000</double>
+        </property>
+        <property name="value">
+         <double>1.000000000000000</double>
+        </property>
+        <property name="suffix">
+         <string> voxels</string>
+        </property>
+        <property name="SlicerParameterName" stdset="0">
+         <string notr="true">softEdgeThicknessVoxel</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="label_9">
+        <property name="text">
+         <string>Color bleed:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="ctkSliderWidget" name="colorBleedSliderWidget">
+        <property name="enabled">
+         <bool>true</bool>
+        </property>
+        <property name="toolTip">
+         <string>Segments are expanded by this much to make sure they cover the entire segmented structure. Increase the value if a structure is not fully covered by the segmentation. Decrease it to make coloring follow the segmentation more accurately.</string>
+        </property>
+        <property name="singleStep">
+         <double>0.100000000000000</double>
+        </property>
+        <property name="pageStep">
+         <double>1.000000000000000</double>
+        </property>
+        <property name="minimum">
+         <double>0.000000000000000</double>
+        </property>
+        <property name="maximum">
+         <double>5.000000000000000</double>
+        </property>
+        <property name="value">
+         <double>1.000000000000000</double>
+        </property>
+        <property name="suffix">
+         <string> voxels</string>
+        </property>
+        <property name="SlicerParameterName" stdset="0">
+         <string notr="true">colorBleedThicknessVoxel</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="0">
+       <widget class="QLabel" name="label_6">
+        <property name="text">
+         <string>Background color:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="1">
+       <widget class="ctkColorPickerButton" name="backgroundColorPickerButton">
+        <property name="toolTip">
+         <string>Color of regions outside all segments.</string>
+        </property>
+        <property name="color">
+         <color>
+          <red>255</red>
+          <green>255</green>
+          <blue>255</blue>
+         </color>
+        </property>
+        <property name="displayColorName">
+         <bool>false</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="4" column="0">
+       <widget class="QLabel" name="label_8">
+        <property name="toolTip">
+         <string>Show the volume automatically after &quot;Apply&quot;</string>
+        </property>
+        <property name="text">
+         <string>Auto-show:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="4" column="1">
+       <widget class="QCheckBox" name="autoShowVolumeRenderingCheckBox">
+        <property name="toolTip">
+         <string>If checked, the Output color volume is automatically displayed in the 3D views after clickin Apply.</string>
+        </property>
+        <property name="text">
+         <string/>
+        </property>
+        <property name="SlicerParameterName" stdset="0">
+         <string>autoShowVolumeRendering</string>
+        </property>
+       </widget>
+      </item>
+      <item row="5" column="0" colspan="2">
+       <widget class="QPushButton" name="resetToDefaultsButton">
+        <property name="toolTip">
+         <string>Reset background opacity, soft edge, and color bleed values to default.</string>
+        </property>
+        <property name="text">
+         <string>Reset to defaults</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QPushButton" name="applyButton">
+     <property name="toolTip">
+      <string>Run the algorithm.</string>
+     </property>
+     <property name="text">
+      <string>Apply</string>
+     </property>
+     <property name="default">
+      <bool>true</bool>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="ctkCollapsibleGroupBox" name="CollapsibleGroupBox">
+     <property name="title">
+      <string>Display</string>
+     </property>
+     <property name="collapsed">
+      <bool>false</bool>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayout_3">
+      <item>
+       <widget class="QGroupBox" name="groupBox_2">
+        <property name="title">
+         <string>Scalar opacity</string>
+        </property>
+        <layout class="QFormLayout" name="formLayout_4">
+         <item row="0" column="0">
+          <widget class="QLabel" name="label_10">
+           <property name="text">
+            <string>Threshold:</string>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="1">
+          <widget class="ctkSliderWidget" name="volumeRenderingLevelWidget">
+           <property name="enabled">
+            <bool>true</bool>
+           </property>
+           <property name="toolTip">
+            <string>Parts of the image that has intensity above this threshold will appear in the 3D view. Increase the value to show less. Specified of percentage of displayed intensity range of the input volume.</string>
+           </property>
+           <property name="singleStep">
+            <double>0.100000000000000</double>
+           </property>
+           <property name="pageStep">
+            <double>1.000000000000000</double>
+           </property>
+           <property name="minimum">
+            <double>0.000000000000000</double>
+           </property>
+           <property name="maximum">
+            <double>5.000000000000000</double>
+           </property>
+           <property name="value">
+            <double>1.000000000000000</double>
+           </property>
+           <property name="suffix">
+            <string>%</string>
+           </property>
+           <property name="SlicerParameterName" stdset="0">
+            <string notr="true">volumeRenderingLevelPercent</string>
+           </property>
+          </widget>
+         </item>
+         <item row="1" column="0">
+          <widget class="QLabel" name="label_11">
+           <property name="text">
+            <string>Window:</string>
+           </property>
+          </widget>
+         </item>
+         <item row="1" column="1">
+          <widget class="ctkSliderWidget" name="volumeRenderingWindowWidget">
+           <property name="enabled">
+            <bool>true</bool>
+           </property>
+           <property name="toolTip">
+            <string>Width of the transition zone around the threshold value. Larger window means smoother transition, more semi-transparent regions. Smaller window means a hard transition, resulting in sharper edges and opaque surfaces.</string>
+           </property>
+           <property name="singleStep">
+            <double>0.100000000000000</double>
+           </property>
+           <property name="pageStep">
+            <double>1.000000000000000</double>
+           </property>
+           <property name="minimum">
+            <double>0.000000000000000</double>
+           </property>
+           <property name="maximum">
+            <double>5.000000000000000</double>
+           </property>
+           <property name="value">
+            <double>1.000000000000000</double>
+           </property>
+           <property name="suffix">
+            <string>%</string>
+           </property>
+           <property name="SlicerParameterName" stdset="0">
+            <string notr="true">volumeRenderingWindowPercent</string>
+           </property>
+          </widget>
+         </item>
+         <item row="2" column="0">
+          <widget class="QLabel" name="label_12">
+           <property name="text">
+            <string>Opacity:</string>
+           </property>
+          </widget>
+         </item>
+         <item row="2" column="1">
+          <widget class="ctkSliderWidget" name="volumeRenderingOpacityWidget">
+           <property name="enabled">
+            <bool>true</bool>
+           </property>
+           <property name="toolTip">
+            <string>Overall opacity of the image displayed in 3D.</string>
+           </property>
+           <property name="singleStep">
+            <double>0.100000000000000</double>
+           </property>
+           <property name="pageStep">
+            <double>1.000000000000000</double>
+           </property>
+           <property name="minimum">
+            <double>0.000000000000000</double>
+           </property>
+           <property name="maximum">
+            <double>5.000000000000000</double>
+           </property>
+           <property name="value">
+            <double>1.000000000000000</double>
+           </property>
+           <property name="suffix">
+            <string>%</string>
+           </property>
+           <property name="SlicerParameterName" stdset="0">
+            <string notr="true">volumeRenderingOpacityPercent</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+      </item>
+      <item>
+       <widget class="QGroupBox" name="groupBox">
+        <property name="title">
+         <string>Gradient opacity</string>
+        </property>
+        <layout class="QFormLayout" name="formLayout">
+         <item row="1" column="0">
+          <widget class="QLabel" name="label_13">
+           <property name="text">
+            <string>Threshold:</string>
+           </property>
+          </widget>
+         </item>
+         <item row="1" column="1">
+          <widget class="ctkSliderWidget" name="volumeRenderingGradientOpacityLevelWidget">
+           <property name="enabled">
+            <bool>false</bool>
+           </property>
+           <property name="toolTip">
+            <string>Regions that have intensity change above this value (e.g., surfaces boundaries) will appear in the 3D view, and regions that have more uniform intensity will be transparent.</string>
+           </property>
+           <property name="singleStep">
+            <double>0.100000000000000</double>
+           </property>
+           <property name="pageStep">
+            <double>1.000000000000000</double>
+           </property>
+           <property name="minimum">
+            <double>0.000000000000000</double>
+           </property>
+           <property name="maximum">
+            <double>5.000000000000000</double>
+           </property>
+           <property name="value">
+            <double>1.000000000000000</double>
+           </property>
+           <property name="suffix">
+            <string/>
+           </property>
+           <property name="SlicerParameterName" stdset="0">
+            <string notr="true">volumeRenderingGradientOpacityLevel</string>
+           </property>
+          </widget>
+         </item>
+         <item row="2" column="0">
+          <widget class="QLabel" name="label_14">
+           <property name="text">
+            <string>Window:</string>
+           </property>
+          </widget>
+         </item>
+         <item row="2" column="1">
+          <widget class="ctkSliderWidget" name="volumeRenderingGradientOpacityWindowWidget">
+           <property name="enabled">
+            <bool>false</bool>
+           </property>
+           <property name="toolTip">
+            <string>Width of the transition zone around the threshold value. Larger window means smoother transition. Smaller window means a hard transition, resulting in sharper edges.</string>
+           </property>
+           <property name="singleStep">
+            <double>0.100000000000000</double>
+           </property>
+           <property name="pageStep">
+            <double>1.000000000000000</double>
+           </property>
+           <property name="minimum">
+            <double>0.000000000000000</double>
+           </property>
+           <property name="maximum">
+            <double>5.000000000000000</double>
+           </property>
+           <property name="value">
+            <double>1.000000000000000</double>
+           </property>
+           <property name="suffix">
+            <string/>
+           </property>
+           <property name="SlicerParameterName" stdset="0">
+            <string notr="true">volumeRenderingGradientOpacityWindow</string>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="0">
+          <widget class="QLabel" name="label_15">
+           <property name="text">
+            <string>Enable:</string>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="1">
+          <widget class="QCheckBox" name="volumeRenderingGradientOpacityCheckBox">
+           <property name="toolTip">
+            <string>Enable to highlight surface boundaries and make uniform regions transparent.</string>
+           </property>
+           <property name="text">
+            <string/>
+           </property>
+           <property name="SlicerParameterName" stdset="0">
+            <string>volumeRenderingGradientOpacity</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+      </item>
+      <item>
+       <widget class="ctkCollapsibleButton" name="CollapsibleButton">
+        <property name="text">
+         <string>Advanced</string>
+        </property>
+        <property name="collapsed">
+         <bool>true</bool>
+        </property>
+        <property name="collapsedHeight">
+         <number>6</number>
+        </property>
+        <layout class="QVBoxLayout" name="verticalLayout_2">
+         <item>
+          <widget class="qMRMLVolumePropertyNodeWidget" name="volumePropertyNodeWidget">
+           <property name="enabled">
+            <bool>false</bool>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="showVolumeRenderingButton">
+        <property name="enabled">
+         <bool>false</bool>
+        </property>
+        <property name="toolTip">
+         <string>Show the output volume in 3D using volume rendering</string>
+        </property>
+        <property name="text">
+         <string>Show in 3D</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="resetVolumeRenderingSettingsButton">
+        <property name="enabled">
+         <bool>false</bool>
+        </property>
+        <property name="toolTip">
+         <string>Reset all Scalar opacity and Gradient opacity settings to default.</string>
+        </property>
+        <property name="text">
+         <string>Reset volume rendering</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="volumeRenderingSettingsButton">
+        <property name="enabled">
+         <bool>false</bool>
+        </property>
+        <property name="toolTip">
+         <string>Go to Volume Rendering module to edit more 3D rendering settings.</string>
+        </property>
+        <property name="text">
+         <string>Go to Volume Rendering module</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <spacer name="verticalSpacer">
+     <property name="orientation">
+      <enum>Qt::Vertical</enum>
+     </property>
+     <property name="sizeHint" stdset="0">
+      <size>
+       <width>20</width>
+       <height>40</height>
+      </size>
+     </property>
+    </spacer>
+   </item>
+  </layout>
+ </widget>
+ <customwidgets>
+  <customwidget>
+   <class>ctkCollapsibleButton</class>
+   <extends>QWidget</extends>
+   <header>ctkCollapsibleButton.h</header>
+   <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>ctkCollapsibleGroupBox</class>
+   <extends>QGroupBox</extends>
+   <header>ctkCollapsibleGroupBox.h</header>
+   <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>ctkColorPickerButton</class>
+   <extends>QPushButton</extends>
+   <header>ctkColorPickerButton.h</header>
+  </customwidget>
+  <customwidget>
+   <class>ctkSliderWidget</class>
+   <extends>QWidget</extends>
+   <header>ctkSliderWidget.h</header>
+  </customwidget>
+  <customwidget>
+   <class>qMRMLNodeComboBox</class>
+   <extends>QWidget</extends>
+   <header>qMRMLNodeComboBox.h</header>
+  </customwidget>
+  <customwidget>
+   <class>qMRMLWidget</class>
+   <extends>QWidget</extends>
+   <header>qMRMLWidget.h</header>
+   <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>qMRMLVolumePropertyNodeWidget</class>
+   <extends>QWidget</extends>
+   <header>qMRMLVolumePropertyNodeWidget.h</header>
+  </customwidget>
+ </customwidgets>
+ <resources/>
+ <connections>
+  <connection>
+   <sender>ColorizeVolume</sender>
+   <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
+   <receiver>inputScalarVolumeSelector</receiver>
+   <slot>setMRMLScene(vtkMRMLScene*)</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>122</x>
+     <y>132</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>220</x>
+     <y>59</y>
+    </hint>
+   </hints>
+  </connection>
+  <connection>
+   <sender>ColorizeVolume</sender>
+   <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
+   <receiver>outputRgbaVolumeSelector</receiver>
+   <slot>setMRMLScene(vtkMRMLScene*)</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>82</x>
+     <y>135</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>347</x>
+     <y>113</y>
+    </hint>
+   </hints>
+  </connection>
+  <connection>
+   <sender>ColorizeVolume</sender>
+   <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
+   <receiver>inputSegmentationSelector</receiver>
+   <slot>setMRMLScene(vtkMRMLScene*)</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>161</x>
+     <y>8</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>220</x>
+     <y>85</y>
+    </hint>
+   </hints>
+  </connection>
+  <connection>
+   <sender>outputRgbaVolumeSelector</sender>
+   <signal>currentNodeChanged(bool)</signal>
+   <receiver>showVolumeRenderingButton</receiver>
+   <slot>setEnabled(bool)</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>324</x>
+     <y>113</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>112</x>
+     <y>439</y>
+    </hint>
+   </hints>
+  </connection>
+  <connection>
+   <sender>outputRgbaVolumeSelector</sender>
+   <signal>currentNodeChanged(bool)</signal>
+   <receiver>volumePropertyNodeWidget</receiver>
+   <slot>setEnabled(bool)</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>384</x>
+     <y>113</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>252</x>
+     <y>531</y>
+    </hint>
+   </hints>
+  </connection>
+  <connection>
+   <sender>outputRgbaVolumeSelector</sender>
+   <signal>currentNodeChanged(bool)</signal>
+   <receiver>resetVolumeRenderingSettingsButton</receiver>
+   <slot>setEnabled(bool)</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>384</x>
+     <y>113</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>197</x>
+     <y>469</y>
+    </hint>
+   </hints>
+  </connection>
+  <connection>
+   <sender>outputRgbaVolumeSelector</sender>
+   <signal>currentNodeChanged(bool)</signal>
+   <receiver>volumeRenderingSettingsButton</receiver>
+   <slot>setEnabled(bool)</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>384</x>
+     <y>113</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>287</x>
+     <y>535</y>
+    </hint>
+   </hints>
+  </connection>
+  <connection>
+   <sender>volumeRenderingGradientOpacityCheckBox</sender>
+   <signal>toggled(bool)</signal>
+   <receiver>volumeRenderingGradientOpacityLevelWidget</receiver>
+   <slot>setEnabled(bool)</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>118</x>
+     <y>363</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>118</x>
+     <y>378</y>
+    </hint>
+   </hints>
+  </connection>
+  <connection>
+   <sender>volumeRenderingGradientOpacityCheckBox</sender>
+   <signal>toggled(bool)</signal>
+   <receiver>volumeRenderingGradientOpacityWindowWidget</receiver>
+   <slot>setEnabled(bool)</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>234</x>
+     <y>359</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>243</x>
+     <y>404</y>
+    </hint>
+   </hints>
+  </connection>
+  <connection>
+   <sender>outputRgbaVolumeSelector</sender>
+   <signal>currentNodeChanged(bool)</signal>
+   <receiver>groupBox_2</receiver>
+   <slot>setEnabled(bool)</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>275</x>
+     <y>101</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>87</x>
+     <y>229</y>
+    </hint>
+   </hints>
+  </connection>
+  <connection>
+   <sender>outputRgbaVolumeSelector</sender>
+   <signal>currentNodeChanged(bool)</signal>
+   <receiver>groupBox</receiver>
+   <slot>setEnabled(bool)</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>305</x>
+     <y>111</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>274</x>
+     <y>343</y>
+    </hint>
+   </hints>
+  </connection>
+ </connections>
+</ui>
