@@ -4,9 +4,10 @@
 Collection of modules for 3D Slicer, which are already useful, but not finalized, polished, or proven to be useful enough to be included in Slicer core.
 - Auto Save: automatically save the scene at specified time intervals.
 - [Characterize Transform Matrix](#characterize-transform-matrix): quick geometric interpretations of a transformation matrix
-- Combine Models: Boolean operations(union, intersection, difference) for models.
+- [Combine Models](#combine-models): Boolean operations(union, intersection, difference) for models.
 - [Curved Planar Reformat](#curved-planar-reformat): straighten vessels, bones, or other structures for easier visualization, quantification, creating panoramic dental X-ray, etc.
 - Documentation Tools: tools for creating documentation on read-the-docs. It can generate html documentation from a Slicer source tree, convert module documentation from MediaWiki to markdown, etc.
+- [Export Model to 3MF](#export-model-to-3mf): export model nodes as 3MF files for 3D printing.
 - [Import ITK-Snap label description file](#ImportItkSnapLabel): import label description (*.label, *.txt) files as a color table node
 - Import OCT: Load Topcon OCT image file (`*.fda`).
 - Import Osirix ROI: Load Osirix ROI files as segmentation.
@@ -71,6 +72,27 @@ If the slice size is increased then folding occurs:
 
 Probably you can find a parameter set that works for a large group of patients. Maybe one parameter set works for all, but maybe you need to have a few different presets (small, medium, large)
 
+## Export Model to 3MF
+
+Export model nodes as 3MF (3D Manufacturing Format) files for 3D printing and CAD applications. 3MF is an open-source file format specifically designed for 3D printing. The module automatically installs the required Lib3MF library on first use.
+
+### Usage
+
+Export is available in the following places:
+- Export model node as a 3MF file from the subject hierarchy tree (using right-click menu) in Data module
+- Save model as .3mf file in "Save data" dialog (loading is not implemented)
+- Export Model to 3MF module GUI
+
+### For developers
+
+Usage via Python:
+
+```python
+from ExportModelTo3mf import ExportModelTo3mfLogic
+logic = ExportModelTo3mfLogic()
+logic.exportModelTo3MF(modelNode, "/path/to/output.3mf")
+```
+
 ## Characterize Transform Matrix
 
 It is often difficult to understand what a transform matrix is doing just by inspecting the numerical values.  All the information is in those 12 numbers, but not in an easily understood format. Characterize Transform Matrix module provides information on what a transformation matrix is doing.  For example, is it a rigid transformation or is there scaling or reflection?  If there is scaling, what are the scale factors and stretch directions?  Is there rotation?  If so, what is the axis of rotation and how much rotation occurs around that axis?  Alternatively, if we break down the rotation into a sequence of rotations around coordinate axes, what is the rotation about each axis?
@@ -133,6 +155,14 @@ decompositionResults = CharacterizeTransformMatrix.CharacterizeTransformMatrixLo
 |stretchOnlyMatrix|4x4 stretch matrix `K` from the decomposition|
 |scaleMatrixList|list of three 4x4 symmetric (likely non-uniform) scale matrices (`S1*S2*S3=K`)|
 |stretchEigenvectorMatrix|4x4 matrix with the stretch direction eigenvectors as the first 3 columns|
+
+## Combine Models
+
+This module was created by adding a Slicer module wrapper to [vtkbool](https://github.com/zippy84/vtkbool), a library used for more robust boolean operations on vtkPolyData.
+
+### If you use this module for your research please address this citation details
+
+Römer, R. vtkbool (Version 3.2.0) [Computer software]. https://github.com/zippy84/vtkbool
 
 ## Stitch Volumes
 

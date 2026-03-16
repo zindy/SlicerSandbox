@@ -1,5 +1,5 @@
 /*
-Copyright 2012-2024 Ronald Römer
+Copyright 2012-2025 Ronald Römer
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -14,20 +14,20 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-#include <map>
-#include <deque>
-#include <vector>
-#include <set>
 #include <algorithm>
-#include <cmath>
-#include <functional>
-#include <queue>
-#include <memory>
-#include <tuple>
-
 #include <chrono>
-#include <numeric>
+#include <cmath>
+#include <deque>
+#include <functional>
 #include <iterator>
+#include <map>
+#include <memory>
+#include <numeric>
+#include <queue>
+#include <set>
+#include <sstream>
+#include <tuple>
+#include <vector>
 
 #include <vtkInformation.h>
 #include <vtkInformationVector.h>
@@ -47,11 +47,14 @@ limitations under the License.
 #include <vtkCellArrayIterator.h>
 #include <vtkKdTree.h>
 #include <vtkCellIterator.h>
+#include <vtkTransformPolyDataFilter.h>
 
 #include "vtkPolyDataBooleanFilter.h"
-#include "vtkPolyDataContactFilter.h"
 
 #include "Utilities.h"
+#include "Optimize.h"
+#include "Contact.h"
+#include "Merger.h"
 
 vtkStandardNewMacro(vtkPolyDataBooleanFilter);
 
@@ -76,10 +79,33 @@ vtkPolyDataBooleanFilter::vtkPolyDataBooleanFilter () {
 
     OperMode = OPER_UNION;
 
+    matrices[0] = nullptr;
+    matrices[1] = nullptr;
+
+    transforms[0] = nullptr;
+    transforms[1] = nullptr;
+
+    timeMatrixA = 0;
+    timeMatrixB = 0;
+
 }
 
 vtkPolyDataBooleanFilter::~vtkPolyDataBooleanFilter () {
-    // nix mehr
+    if (matrices[0] != nullptr) {
+        matrices[0]->Delete();
+    }
+
+    if (matrices[1] != nullptr) {
+        matrices[1]->Delete();
+    }
+
+    if (transforms[0] != nullptr) {
+        transforms[0]->Delete();
+    }
+
+    if (transforms[1] != nullptr) {
+        transforms[1]->Delete();
+    }
 }
 
 int vtkPolyDataBooleanFilter::RequestData(vtkInformation *request, vtkInformationVector **inputVector, vtkInformationVector *outputVector) {
@@ -104,63 +130,100 @@ int vtkPolyDataBooleanFilter::RequestData(vtkInformation *request, vtkInformatio
         std::vector<clock::duration> times;
         clock::time_point start;
 
-        if (pdA->GetMTime() > timePdA || pdB->GetMTime() > timePdB) {
-            // eventuell vorhandene regionen vereinen
+        vtkMTimeType timeA = pdA->GetMTime();
+        vtkMTimeType timeB = pdB->GetMTime();
 
-            auto cleanA = vtkSmartPointer<vtkCleanPolyData>::New();
-            cleanA->SetOutputPointsPrecision(DOUBLE_PRECISION);
-            cleanA->SetTolerance(1e-6);
-            cleanA->SetInputData(pdA);
-            cleanA->Update();
+        if (timeA > timePdA || timeB > timePdB || (matrices[0] != nullptr && matrices[0]->GetMTime() > timeMatrixA) || (matrices[1] != nullptr && matrices[1]->GetMTime() > timeMatrixB)) {
 
-            auto cleanB = vtkSmartPointer<vtkCleanPolyData>::New();
-            cleanB->SetOutputPointsPrecision(DOUBLE_PRECISION);
-            cleanB->SetTolerance(1e-6);
-            cleanB->SetInputData(pdB);
-            cleanB->Update();
+            if (contact == nullptr || timeA > timePdA || timeB > timePdB) {
+                // CellData sichern
+
+                cellDataA->DeepCopy(pdA->GetCellData());
+                cellDataB->DeepCopy(pdB->GetCellData());
+
+                cleanA = Clean(pdA);
+                cleanB = Clean(pdB);
 
 #ifdef DEBUG
-            std::cout << "Exporting modPdA.vtk" << std::endl;
-            WriteVTK("modPdA.vtk", cleanA->GetOutput());
-
-            std::cout << "Exporting modPdB.vtk" << std::endl;
-            WriteVTK("modPdB.vtk", cleanB->GetOutput());
+            WriteVTK("modPdA.vtk", cleanA);
+            WriteVTK("modPdB.vtk", cleanB);
 #endif
 
-            // CellData sichern
+                try {
+                    PreventEqualCaptPoints(cleanA, cleanB).Run();
+                } catch (const std::runtime_error &e) {
+                    vtkErrorMacro("Cannot prevent equal capture points.");
+                    return 1;
+                }
 
-            cellDataA->DeepCopy(cleanA->GetOutput()->GetCellData());
-            cellDataB->DeepCopy(cleanB->GetOutput()->GetCellData());
-
-            // ermittelt kontaktstellen
+                contact = std::make_shared<Contact>(cleanA, cleanB);
+            }
 
             start = clock::now();
 
-            auto cl = vtkSmartPointer<vtkPolyDataContactFilter>::New();
-            cl->SetInputConnection(0, cleanA->GetOutputPort());
-            cl->SetInputConnection(1, cleanB->GetOutputPort());
-            cl->Update();
+            modPdA = vtkSmartPointer<vtkPolyData>::New();
+            modPdB = vtkSmartPointer<vtkPolyData>::New();
+
+            if (transforms[0] != nullptr) {
+                auto tfA = vtkSmartPointer<vtkTransformPolyDataFilter>::New();
+                tfA->SetInputData(cleanA);
+                tfA->SetTransform(transforms[0]);
+                tfA->Update();
+
+                modPdA->DeepCopy(tfA->GetOutput());
+            } else {
+                modPdA->DeepCopy(cleanA);
+            }
+
+            if (transforms[1] != nullptr) {
+                auto tfB = vtkSmartPointer<vtkTransformPolyDataFilter>::New();
+                tfB->SetInputData(cleanB);
+                tfB->SetTransform(transforms[1]);
+                tfB->Update();
+
+                modPdB->DeepCopy(tfB->GetOutput());
+            } else {
+                modPdB->DeepCopy(cleanB);
+            }
+
+            modPdA->EditableOn();
+            modPdB->EditableOn();
+
+            try {
+                contLines = contact->GetLines(modPdA, transforms[0], modPdB, transforms[1]);
+            } catch (const std::runtime_error &e) {
+                std::stringstream ss;
+                ss << std::quoted(e.what());
+
+                vtkErrorMacro("Contact failed with " << ss.str());
+
+                return 1;
+            }
 
             times.push_back(clock::now()-start);
 
-            contLines->DeepCopy(cl->GetOutput());
-
-            modPdA->DeepCopy(cl->GetOutput(1));
-            modPdB->DeepCopy(cl->GetOutput(2));
-
 #ifdef DEBUG
-            std::cout << "Exporting contLines.vtk" << std::endl;
-            WriteVTK("contLines.vtk", contLines);
-
-            std::cout << "Exporting modPdA_1.vtk" << std::endl;
             WriteVTK("modPdA_1.vtk", modPdA);
-
-            std::cout << "Exporting modPdB_1.vtk" << std::endl;
             WriteVTK("modPdB_1.vtk", modPdB);
+            WriteVTK("contLines.vtk", contLines);
 #endif
 
             if (contLines->GetNumberOfCells() == 0) {
+                vtkErrorMacro("There is no contact.");
                 return 1;
+            }
+
+            vtkIdType i;
+
+            auto cells = vtkSmartPointer<vtkIdList>::New();
+
+            for (i = 0; i < contLines->GetNumberOfPoints(); i++) {
+                contLines->GetPointCells(i, cells);
+
+                if (cells->GetNumberOfIds() == 1) {
+                    vtkErrorMacro("At least one line-end has only one neighbor.");
+                    return 1;
+                }
             }
 
             // in den CellDatas steht drin, welche polygone einander schneiden
@@ -171,20 +234,6 @@ int vtkPolyDataBooleanFilter::RequestData(vtkInformation *request, vtkInformatio
             vtkIdTypeArray *sourcesA = vtkIdTypeArray::SafeDownCast(contLines->GetCellData()->GetScalars("sourcesA"));
             vtkIdTypeArray *sourcesB = vtkIdTypeArray::SafeDownCast(contLines->GetCellData()->GetScalars("sourcesB"));
 
-            vtkIdType i, numPts = contLines->GetNumberOfPoints();
-
-            auto cells = vtkSmartPointer<vtkIdList>::New();
-
-            for (i = 0; i < numPts; i++) {
-                contLines->GetPointCells(i, cells);
-
-                if (cells->GetNumberOfIds() == 1) {
-                    vtkErrorMacro("Contact ends suddenly.");
-                    return 1;
-                }
-
-            }
-
             // sichert die OrigCellIds
 
             vtkIdTypeArray *origCellIdsA = vtkIdTypeArray::SafeDownCast(modPdA->GetCellData()->GetScalars("OrigCellIds"));
@@ -193,8 +242,8 @@ int vtkPolyDataBooleanFilter::RequestData(vtkInformation *request, vtkInformatio
             cellIdsA->DeepCopy(origCellIdsA);
             cellIdsB->DeepCopy(origCellIdsB);
 
-            vtkIdType numCellsA = modPdA->GetNumberOfCells(),
-                numCellsB = modPdB->GetNumberOfCells();
+            vtkIdType numCellsA = modPdA->GetNumberOfCells();
+            vtkIdType numCellsB = modPdB->GetNumberOfCells();
 
             for (i = 0; i < numCellsA; i++) {
                 origCellIdsA->SetValue(i, i);
@@ -236,10 +285,7 @@ int vtkPolyDataBooleanFilter::RequestData(vtkInformation *request, vtkInformatio
             times.push_back(clock::now()-start);
 
 #ifdef DEBUG
-            std::cout << "Exporting modPdA_2.vtk" << std::endl;
             WriteVTK("modPdA_2.vtk", modPdA);
-
-            std::cout << "Exporting modPdB_2.vtk" << std::endl;
             WriteVTK("modPdB_2.vtk", modPdB);
 #endif
 
@@ -251,10 +297,7 @@ int vtkPolyDataBooleanFilter::RequestData(vtkInformation *request, vtkInformatio
             times.push_back(clock::now()-start);
 
 #ifdef DEBUG
-            std::cout << "Exporting modPdA_3.vtk" << std::endl;
             WriteVTK("modPdA_3.vtk", modPdA);
-
-            std::cout << "Exporting modPdB_3.vtk" << std::endl;
             WriteVTK("modPdB_3.vtk", modPdB);
 #endif
 
@@ -266,10 +309,7 @@ int vtkPolyDataBooleanFilter::RequestData(vtkInformation *request, vtkInformatio
             times.push_back(clock::now()-start);
 
 #ifdef DEBUG
-            std::cout << "Exporting modPdA_4.vtk" << std::endl;
             WriteVTK("modPdA_4.vtk", modPdA);
-
-            std::cout << "Exporting modPdB_4.vtk" << std::endl;
             WriteVTK("modPdB_4.vtk", modPdB);
 #endif
 
@@ -281,10 +321,7 @@ int vtkPolyDataBooleanFilter::RequestData(vtkInformation *request, vtkInformatio
             times.push_back(clock::now()-start);
 
 #ifdef DEBUG
-            std::cout << "Exporting modPdA_5.vtk" << std::endl;
             WriteVTK("modPdA_5.vtk", modPdA);
-
-            std::cout << "Exporting modPdB_5.vtk" << std::endl;
             WriteVTK("modPdB_5.vtk", modPdB);
 #endif
 
@@ -296,10 +333,7 @@ int vtkPolyDataBooleanFilter::RequestData(vtkInformation *request, vtkInformatio
             times.push_back(clock::now()-start);
 
 #ifdef DEBUG
-            std::cout << "Exporting modPdA_6.vtk" << std::endl;
             WriteVTK("modPdA_6.vtk", modPdA);
-
-            std::cout << "Exporting modPdB_6.vtk" << std::endl;
             WriteVTK("modPdB_6.vtk", modPdB);
 #endif
 
@@ -311,15 +345,20 @@ int vtkPolyDataBooleanFilter::RequestData(vtkInformation *request, vtkInformatio
             times.push_back(clock::now()-start);
 
 #ifdef DEBUG
-            std::cout << "Exporting modPdA_7.vtk" << std::endl;
             WriteVTK("modPdA_7.vtk", modPdA);
-
-            std::cout << "Exporting modPdB_7.vtk" << std::endl;
             WriteVTK("modPdB_7.vtk", modPdB);
 #endif
 
             timePdA = pdA->GetMTime();
             timePdB = pdB->GetMTime();
+
+            if (matrices[0] != nullptr) {
+                timeMatrixA = matrices[0]->GetMTime();
+            }
+
+            if (matrices[1] != nullptr) {
+                timeMatrixB = matrices[1]->GetMTime();
+            }
 
         }
 
@@ -332,7 +371,7 @@ int vtkPolyDataBooleanFilter::RequestData(vtkInformation *request, vtkInformatio
 
         times.push_back(clock::now()-start);
 
-// #ifdef DEBUG
+#ifdef DEBUG
         double sum = std::chrono::duration_cast<std::chrono::duration<double>>(std::accumulate(times.begin(), times.end(), clock::duration())).count();
 
         std::vector<clock::duration>::const_iterator itr;
@@ -343,7 +382,7 @@ int vtkPolyDataBooleanFilter::RequestData(vtkInformation *request, vtkInformatio
                 << ": " << time << "s (" << (time/sum*100) << "%)"
                 << std::endl;
         }
-// #endif
+#endif
 
     }
 
@@ -433,11 +472,11 @@ void vtkPolyDataBooleanFilter::GetStripPoints (vtkPolyData *pd, vtkIdTypeArray *
                 sp.t = std::min(1., std::max(0., t));
 
                 if (vtkMath::Norm(sA) < 1e-5) {
-                    Cpy(sp.captPt, a, 3);
+                    std::copy_n(a, 3, sp.captPt);
                     sp.capt = Capt::A;
 
                 } else if (vtkMath::Norm(sB) < 1e-5) {
-                    Cpy(sp.captPt, b, 3);
+                    std::copy_n(b, 3, sp.captPt);
                     sp.capt = Capt::B;
 
                 } else {
@@ -448,9 +487,9 @@ void vtkPolyDataBooleanFilter::GetStripPoints (vtkPolyData *pd, vtkIdTypeArray *
                     vtkMath::Add(a, u, x);
 
                     // projektion
-                    Cpy(sp.captPt, x, 3);
+                    std::copy_n(x, 3, sp.captPt);
 
-                    sp.capt = Capt::EDGE;
+                    sp.capt = Capt::Edge;
 
                 }
             }
@@ -467,8 +506,8 @@ void vtkPolyDataBooleanFilter::GetStripPoints (vtkPolyData *pd, vtkIdTypeArray *
             sp.catched = false;
         }
 
-        if (sp.capt == Capt::NOT && links[sp.ind] > 2) {
-            sp.capt = Capt::BRANCHED;
+        if (sp.capt == Capt::Not && links[sp.ind] > 2) {
+            sp.capt = Capt::Branched;
         }
 
         pts.emplace(sp.ind, std::move(sp));
@@ -480,7 +519,7 @@ void vtkPolyDataBooleanFilter::GetStripPoints (vtkPolyData *pd, vtkIdTypeArray *
     for (itr2 = pts.begin(); itr2 != pts.end(); ++itr2) {
         StripPt &sp = itr2->second;
 
-        if (sp.capt & Capt::BOUNDARY) {
+        if (sp.capt & Capt::Boundary) {
             if (sp.capt == Capt::B) {
                 sp.t = 0;
 
@@ -501,10 +540,10 @@ void vtkPolyDataBooleanFilter::GetStripPoints (vtkPolyData *pd, vtkIdTypeArray *
 
             // für den schnitt werden die eingerasteten koordinaten verwendet
 
-            Cpy(sp.cutPt, sp.captPt, 3);
+            std::copy_n(sp.captPt, 3, sp.cutPt);
         } else {
 
-            Cpy(sp.cutPt, sp.pt, 3);
+            std::copy_n(sp.pt, 3, sp.cutPt);
         }
 
     }
@@ -590,8 +629,8 @@ bool vtkPolyDataBooleanFilter::GetPolyStrips (vtkPolyData *pd, vtkIdTypeArray *c
 
                         sp.t = 0;
 
-                        Cpy(sp.captPt, corr.captPt, 3);
-                        Cpy(sp.cutPt, sp.captPt, 3);
+                        std::copy_n(corr.captPt, 3, sp.captPt);
+                        std::copy_n(sp.captPt, 3, sp.cutPt);
 
                         sp.catched = true;
 
@@ -614,7 +653,7 @@ bool vtkPolyDataBooleanFilter::GetPolyStrips (vtkPolyData *pd, vtkIdTypeArray *c
     // sucht nach gleichen captPts
 
     {
-        std::map<Point3d, std::map<vtkIdType, std::vector<std::reference_wrapper<StripPt>>>> collapsed;
+        std::map<Point3d, std::set<vtkIdType>> collapsed;
 
         PolyStripsType::iterator itr;
         StripPtsType::iterator itr2;
@@ -627,38 +666,15 @@ bool vtkPolyDataBooleanFilter::GetPolyStrips (vtkPolyData *pd, vtkIdTypeArray *c
             for (itr2 = pts.begin(); itr2 != pts.end(); ++itr2) {
                 StripPt &sp = itr2->second;
 
-                if (sp.capt & Capt::BOUNDARY) {
-                    collapsed[{sp.cutPt[0], sp.cutPt[1], sp.cutPt[2]}][sp.ind].push_back(sp);
+                if (sp.capt & Capt::Boundary) {
+                    Point3d p(sp.cutPt[0], sp.cutPt[1], sp.cutPt[2]);
+
+                    collapsed[p].emplace(sp.ind);
+
+                    if (collapsed[p].size() == 2) {
+                        return true;
+                    }
                 }
-            }
-        }
-
-        for (auto &[pt, map] : collapsed) {
-            if (map.size() > 1) {
-                // std::cout << pt << std::endl;
-
-                // for (auto &[ind, pts] : map) {
-                //     for (auto &p : pts) {
-                //         std::cout << p << std::endl;
-                //     }
-                // }
-
-                // if (map.size() == 2 && std::all_of(map.begin(), map.end(), [](const auto &m) { return m.second.size() == 1 && m.second.back().get().capt == Capt::EDGE; })) {
-
-                //     for (auto &[ind, pts] : map) {
-                //         StripPt &sp = pts.back();
-
-                //         sp.capt = Capt::NOT;
-                //         sp.edge[0] = sp.edge[1] = NOTSET;
-                //         Cpy(sp.cutPt, sp.pt, 3);
-                //     }
-
-                // } else {
-                //     return true;
-                // }
-
-                return true;
-
             }
         }
     }
@@ -689,7 +705,7 @@ bool vtkPolyDataBooleanFilter::GetPolyStrips (vtkPolyData *pd, vtkIdTypeArray *c
         auto FindRight = [&pts, &_lines, &_itr](StripType &strip, const std::size_t &id) -> bool {
             auto &right = strip.back();
 
-            if (pts.at(right.ind).capt == Capt::NOT) {
+            if (pts.at(right.ind).capt == Capt::Not) {
                 for (_itr = _lines.begin(); _itr != _lines.end(); ++_itr) {
                     if (_itr->f == right.ind) {
                         strip.emplace_back(_itr->g, id);
@@ -711,7 +727,7 @@ bool vtkPolyDataBooleanFilter::GetPolyStrips (vtkPolyData *pd, vtkIdTypeArray *c
         auto FindLeft = [&pts, &_lines, &_itr](StripType &strip, const std::size_t &id) -> bool {
             auto &left = strip.front();
 
-            if (pts.at(left.ind).capt == Capt::NOT) {
+            if (pts.at(left.ind).capt == Capt::Not) {
                 for (_itr = _lines.begin(); _itr != _lines.end(); ++_itr) {
                     if (_itr->f == left.ind) {
                         strip.emplace_front(_itr->g, id);
@@ -766,12 +782,13 @@ bool vtkPolyDataBooleanFilter::GetPolyStrips (vtkPolyData *pd, vtkIdTypeArray *c
             const Base &base = pStrips.base;
 
             auto treePts = vtkSmartPointer<vtkPoints>::New();
+            treePts->SetDataTypeToDouble();
 
             auto treePd = vtkSmartPointer<vtkPolyData>::New();
             treePd->Allocate(1);
 
             std::map<vtkIdType, vtkIdType> ptIds;
-            
+
             double pt[2];
 
             for (const auto &p : pts) {
@@ -880,11 +897,11 @@ void vtkPolyDataBooleanFilter::CompleteStrips (PStrips &pStrips) {
             &end = pStrips.pts[itr->back().ind];
 
         if (start.ind != end.ind) {
-            if (start.capt == Capt::NOT) {
+            if (start.capt == Capt::Not) {
                 StripType s(itr->rbegin(), itr->rend()-1);
                 itr->insert(itr->begin(), s.begin(), s.end());
 
-            } else if (end.capt == Capt::NOT) {
+            } else if (end.capt == Capt::Not) {
                 StripType s(itr->rbegin()+1, itr->rend());
                 itr->insert(itr->end(), s.begin(), s.end());
 
@@ -923,8 +940,8 @@ bool vtkPolyDataBooleanFilter::CleanStrips () {
             StripPtsType &pts = pStrips.pts;
 
             strips.erase(std::remove_if(strips.begin(), strips.end(), [&](const StripType &strip) {
-                if (pts.at(strip.front().ind).capt == Capt::NOT
-                    && pts.at(strip.back().ind).capt == Capt::NOT
+                if (pts.at(strip.front().ind).capt == Capt::Not
+                    && pts.at(strip.back().ind).capt == Capt::Not
                     && !HasArea(strip)) {
 
                     for (const StripPtR &p : strip) {
@@ -1143,7 +1160,7 @@ bool vtkPolyDataBooleanFilter::CutCells (vtkPolyData *pd, PolyStripsType &polySt
         // alle strips gültig?
 
         if (std::find_if(strips.begin(), strips.end(), [&](const StripType &s) {
-            return pts[s.front().ind].capt == Capt::BRANCHED && pts[s.back().ind].capt == Capt::BRANCHED;
+            return pts[s.front().ind].capt == Capt::Branched && pts[s.back().ind].capt == Capt::Branched;
         }) != strips.end()) {
             return true;
         }
@@ -1152,12 +1169,18 @@ bool vtkPolyDataBooleanFilter::CutCells (vtkPolyData *pd, PolyStripsType &polySt
         StripsType holes;
 
         auto fct = [&](const StripType &s) {
-            return pts[s.front().ind].capt == Capt::NOT && pts[s.back().ind].capt == Capt::NOT;
+            return pts[s.front().ind].capt == Capt::Not && pts[s.back().ind].capt == Capt::Not;
         };
 
         std::copy_if(strips.begin(), strips.end(), std::back_inserter(holes), fct);
 
         strips.erase(std::remove_if(strips.begin(), strips.end(), fct), strips.end());
+
+        std::map<std::size_t, std::reference_wrapper<StripType>> stripsM;
+
+        for (auto &strip : strips) {
+            stripsM.emplace(strip.front().strip, strip);
+        }
 
         // init
 
@@ -1167,7 +1190,7 @@ bool vtkPolyDataBooleanFilter::CutCells (vtkPolyData *pd, PolyStripsType &polySt
             for (auto &p : strip) {
                 std::cout << p.ind << ", ";
             }
-            std::cout << "]" << std::endl;
+            std::cout << "] :: " << strip.front().strip << std::endl;
 #endif
 
             // enden auf gleichem edge
@@ -1179,8 +1202,8 @@ bool vtkPolyDataBooleanFilter::CutCells (vtkPolyData *pd, PolyStripsType &polySt
             }
 
             // branched strip
-            if (pts[strip.front().ind].capt == Capt::BRANCHED
-                && pts[strip.back().ind].capt & Capt::BOUNDARY) {
+            if (pts[strip.front().ind].capt == Capt::Branched
+                && pts[strip.back().ind].capt & Capt::Boundary) {
 
                 std::reverse(strip.begin(), strip.end());
             }
@@ -1188,11 +1211,11 @@ bool vtkPolyDataBooleanFilter::CutCells (vtkPolyData *pd, PolyStripsType &polySt
             StripPt &start = pts[strip.front().ind],
                 &end = pts[strip.back().ind];
 
-            strip.front().side = Side::START;
+            strip.front().side = Side::Start;
             strip.front().ref = start.edge[0];
 
-            if (end.capt & Capt::BOUNDARY) {
-                strip.back().side = Side::END;
+            if (end.capt & Capt::Boundary) {
+                strip.back().side = Side::End;
                 strip.back().ref = end.edge[0];
             }
 
@@ -1217,7 +1240,7 @@ bool vtkPolyDataBooleanFilter::CutCells (vtkPolyData *pd, PolyStripsType &polySt
         std::map<vtkIdType, _StripsType> groups;
 
         for (auto &strip : strips) {
-            if (pts[strip.back().ind].capt == Capt::BRANCHED) {
+            if (pts[strip.back().ind].capt == Capt::Branched) {
                 groups[strip.back().ind].emplace_back(strip);
             }
         }
@@ -1338,7 +1361,7 @@ bool vtkPolyDataBooleanFilter::CutCells (vtkPolyData *pd, PolyStripsType &polySt
                     const StripPt &endA = pts[s.front().ind],
                         &endB = pts[s.back().ind];
 
-                    if (endA.capt & Capt::BOUNDARY
+                    if (endA.capt & Capt::Boundary
                         && pA.edge[0] == endA.edge[0]
                         && endA.t > pA.t
                         && (pA.edge[0] != pB.edge[0] || endA.t < pB.t)) {
@@ -1351,7 +1374,7 @@ bool vtkPolyDataBooleanFilter::CutCells (vtkPolyData *pd, PolyStripsType &polySt
                         }
                     }
 
-                    if (endB.capt & Capt::BOUNDARY
+                    if (endB.capt & Capt::Boundary
                         && pA.edge[0] == endB.edge[0]
                         && endB.t > pA.t
                         && (pA.edge[0] != pB.edge[0] || endB.t < pB.t)) {
@@ -1372,7 +1395,7 @@ bool vtkPolyDataBooleanFilter::CutCells (vtkPolyData *pd, PolyStripsType &polySt
                         s.front().ref = stripB.front().desc[0];
                     }
 
-                    if (endB.capt == Capt::BRANCHED) {
+                    if (endB.capt == Capt::Branched) {
                         Transform(endB.pt, proj, pStrips.base);
 
                         if (PointInPoly(_poly, {proj[0], proj[1], 0})) {
@@ -1404,7 +1427,7 @@ bool vtkPolyDataBooleanFilter::CutCells (vtkPolyData *pd, PolyStripsType &polySt
             _StripsType _strips;
 
             for (auto &strip : strips) {
-                if (pts[strip.back().ind].capt != Capt::BRANCHED
+                if (pts[strip.back().ind].capt != Capt::Branched
                     && std::find(next.begin(), next.end(), strip.front().ref) != next.end()) {
 
                     _strips.emplace_back(strip);
@@ -1454,16 +1477,16 @@ bool vtkPolyDataBooleanFilter::CutCells (vtkPolyData *pd, PolyStripsType &polySt
                         if (a.strip != b.strip) {
                             // gehören nicht dem gleichen strip an
 
-                            StripType &stripA = strips[a.strip],
-                                &stripB = strips[b.strip];
+                            StripType &stripA = stripsM.at(a.strip),
+                                &stripB = stripsM.at(b.strip);
 
                             // andere enden ermitteln
 
-                            const StripPtR &eA = (&a == &(stripA.front())) ? stripA.back() : stripA.front(),
-                                &eB = (&b == &(stripB.front())) ? stripB.back() : stripB.front();
+                            const vtkIdType eA = a.ind == stripA.front().ind ? stripA.back().ind : stripA.front().ind,
+                                eB = b.ind == stripB.front().ind ? stripB.back().ind : stripB.front().ind;
 
-                            const StripPt &eA_ = pts[eA.ind],
-                                &eB_ = pts[eB.ind];
+                            const StripPt &eA_ = pts[eA],
+                                &eB_ = pts[eB];
 
                             if (eA_.ind != eB_.ind) {
                                 r = absoluteT[id]+a_.t;
@@ -1478,13 +1501,13 @@ bool vtkPolyDataBooleanFilter::CutCells (vtkPolyData *pd, PolyStripsType &polySt
                             } else {
                                 RefsType poly_;
 
-                                if (a.side == Side::START) {
+                                if (a.side == Side::Start) {
                                     poly_.insert(poly_.end(), stripA.begin(), stripA.end());
                                 } else {
                                     poly_.insert(poly_.end(), stripA.rbegin(), stripA.rend());
                                 }
 
-                                if (b.side == Side::START) {
+                                if (b.side == Side::Start) {
                                     poly_.insert(poly_.end(), stripB.rbegin()+1, stripB.rend()-1);
                                 } else {
                                     poly_.insert(poly_.end(), stripB.begin()+1, stripB.end()-1);
@@ -1499,7 +1522,7 @@ bool vtkPolyDataBooleanFilter::CutCells (vtkPolyData *pd, PolyStripsType &polySt
                         } else {
                             // gleicher strip
 
-                            StripType &strip = strips[a.strip];
+                            StripType &strip = stripsM.at(a.strip);
 
                             if (HasArea(strip)) {
                                 RefsType poly_(strip.begin(), strip.end()-1);
@@ -1527,7 +1550,7 @@ bool vtkPolyDataBooleanFilter::CutCells (vtkPolyData *pd, PolyStripsType &polySt
 
 #ifdef DEBUG
                 for (auto& e : edge) {
-                    std::cout << e << std::endl;
+                    std::cout << e << ", t " << pts[e.get().ind].t << std::endl;
                 }
 #endif
 
@@ -1546,7 +1569,7 @@ bool vtkPolyDataBooleanFilter::CutCells (vtkPolyData *pd, PolyStripsType &polySt
 
 #ifdef DEBUG
                 std::cout << "strip " << start.strip
-                    << " , refs (" << start.ref << ", " << end.ref << ")"
+                    << ", refs (" << start.ref << ", " << end.ref << ")"
                     << std::endl;
 #endif
 
@@ -1660,19 +1683,21 @@ bool vtkPolyDataBooleanFilter::CutCells (vtkPolyData *pd, PolyStripsType &polySt
 
                                         if (p.strip != sp.strip) {
                                             if (p.strip <= start.strip) {
-#ifdef DEBUG
-                                                std::cout << "*1 ref " << sp.ref;
-#endif
+                                                vtkIdType _ref;
 
-                                                if (p.side == Side::END) {
-                                                    sp.ref = p.desc[0];
+                                                if (p.side == Side::End) {
+                                                    _ref = p.desc[0];
                                                 } else {
-                                                    sp.ref = p.desc[1];
+                                                    _ref = p.desc[1];
                                                 }
 
 #ifdef DEBUG
-                                                std::cout << " -> " << sp.ref << " (from strip " << p.strip << ", ind " << p.ind << ")" << std::endl;
+                                                if (sp.ref != _ref) {
+                                                    std::cout << "*1 ref " << sp.ref << " -> " << _ref << " (from strip " << p.strip << ", ind " << p.ind << ")" << std::endl;
+                                                }
 #endif
+
+                                                sp.ref = _ref;
 
                                                 _p = std::make_shared<StripPtR>(p);
 
@@ -1681,7 +1706,9 @@ bool vtkPolyDataBooleanFilter::CutCells (vtkPolyData *pd, PolyStripsType &polySt
                                             }
                                         } else {
 #ifdef DEBUG
-                                            std::cout << "*2 ref " << sp.ref << " -> " << p.ref << " (from strip " << p.strip << ", ind " << p.ind << ")" << std::endl;
+                                            if (sp.ref != p.ref) {
+                                                std::cout << "*2 ref " << sp.ref << " -> " << p.ref << " (from strip " << p.strip << ", ind " << p.ind << ")" << std::endl;
+                                            }
 #endif
 
                                             sp.ref = p.ref;
@@ -1705,19 +1732,21 @@ bool vtkPolyDataBooleanFilter::CutCells (vtkPolyData *pd, PolyStripsType &polySt
                                                 break;
                                             }
 
-#ifdef DEBUG
-                                            std::cout << "*3 ref " << sp.ref;
-#endif
+                                            vtkIdType _ref;
 
-                                            if (p.side == Side::START) {
-                                                sp.ref = p.desc[0];
+                                            if (p.side == Side::Start) {
+                                                _ref = p.desc[0];
                                             } else {
-                                                sp.ref = p.desc[1];
+                                                _ref = p.desc[1];
                                             }
 
 #ifdef DEBUG
-                                            std::cout << " -> " << sp.ref << " (from strip " << p.strip << ", ind " << p.ind << ")" << std::endl;
+                                            if (sp.ref != _ref) {
+                                                std::cout << "*3 ref " << sp.ref << " -> " << _ref << " (from strip " << p.strip << ", ind " << p.ind << ")" << std::endl;
+                                            }
 #endif
+
+                                            sp.ref = _ref;
 
                                             break;
                                         }
@@ -1735,19 +1764,21 @@ bool vtkPolyDataBooleanFilter::CutCells (vtkPolyData *pd, PolyStripsType &polySt
                                     && b.strip == start.strip
                                     && pts[a.ind].capt == Capt::A) { // sollte weg
 
-#ifdef DEBUG
-                                    std::cout << "*4 ref " << a.ref;
-#endif
+                                    vtkIdType _ref;
 
-                                    if (b.side == Side::START) {
-                                        a.ref = b.desc[0];
+                                    if (b.side == Side::Start) {
+                                        _ref = b.desc[0];
                                     } else {
-                                        a.ref = b.desc[1];
+                                        _ref = b.desc[1];
                                     }
 
 #ifdef DEBUG
-                                    std::cout << " -> " << a.ref << " (from strip " << b.strip << ", ind " << b.ind << ")" << std::endl;
+                                    if (a.ref != _ref) {
+                                        std::cout << "*4 ref " << a.ref << " -> " << _ref << " (from strip " << b.strip << ", ind " << b.ind << ")" << std::endl;
+                                    }
 #endif
+
+                                    a.ref = _ref;
 
                                 }
                             }
@@ -1849,7 +1880,7 @@ void vtkPolyDataBooleanFilter::RestoreOrigPoints (vtkPolyData *pd, PolyStripsTyp
         for (itr2 = pStrips.pts.begin(); itr2 != pStrips.pts.end(); ++itr2) {
             const StripPt &sp = itr2->second;
 
-            if (sp.capt & Capt::BOUNDARY) {
+            if (sp.capt & Capt::Boundary) {
                 FindPoints(loc, sp.cutPt, pts);
                 numPts = pts->GetNumberOfIds();
 
@@ -1951,7 +1982,7 @@ void vtkPolyDataBooleanFilter::ResolveOverlaps (vtkPolyData *pd, PolyStripsType 
         for (itr2 = pts.begin(); itr2 != pts.end(); ++itr2) {
             const StripPt &sp = itr2->second;
 
-            if (sp.capt == Capt::EDGE) {
+            if (sp.capt == Capt::Edge) {
                 _pts[sp.ind].emplace_back(pts, sp);
             }
         }
@@ -1974,8 +2005,6 @@ void vtkPolyDataBooleanFilter::ResolveOverlaps (vtkPolyData *pd, PolyStripsType 
 
             auto edgeA = pairA.second.get().edge;
             auto edgeB = pairB.second.get().edge;
-
-            assert(edgeA[1] == edgeB[0]);
 
             if (edgeA[1] == edgeB[0] && edgeA[0] != edgeB[1]) {
 
@@ -2030,13 +2059,13 @@ void vtkPolyDataBooleanFilter::ResolveOverlaps (vtkPolyData *pd, PolyStripsType 
                 if (_edgeA.empty()) {
                     pd->GetPoint(edgeA[0], pA);
                 } else {
-                    Cpy(pA, _edgeA.back().get().pt, 3);
+                    std::copy_n(_edgeA.back().get().pt, 3, pA);
                 }
 
                 if (_edgeB.empty()) {
                     pd->GetPoint(edgeB[1], pB);
                 } else {
-                    Cpy(pB, _edgeB.front().get().pt, 3);
+                    std::copy_n(_edgeB.front().get().pt, 3, pB);
                 }
 
                 Point3d a {pA[0], pA[1], pA[2]};
@@ -2138,7 +2167,7 @@ void vtkPolyDataBooleanFilter::AddAdjacentPoints (vtkPolyData *pd, vtkIdTypeArra
         for (itr2 = pStrips.pts.begin(); itr2 != pStrips.pts.end(); ++itr2) {
             const StripPt &sp = itr2->second;
 
-            if (sp.capt == Capt::EDGE) {
+            if (sp.capt == Capt::Edge) {
                 edgePts[{sp.edge[0], sp.edge[1]}].emplace(sp);
             }
         }
@@ -2454,16 +2483,16 @@ void vtkPolyDataBooleanFilter::MergePoints (vtkPolyData *pd, PolyStripsType &pol
 }
 
 enum class Congr {
-    EQUAL,
-    OPPOSITE,
-    NOT
+    Equal,
+    Opposite,
+    Not
 };
 
 class PolyAtEdge {
     vtkPolyData *pd;
 
 public:
-    PolyAtEdge (vtkPolyData *_pd, vtkIdType _polyId, vtkIdType _ptIdA, vtkIdType _ptIdB) : pd(_pd), polyId(_polyId), ptIdA(_ptIdA), ptIdB(_ptIdB), loc(Loc::NONE) {
+    PolyAtEdge (vtkPolyData *_pd, vtkIdType _polyId, vtkIdType _ptIdA, vtkIdType _ptIdB) : pd(_pd), polyId(_polyId), ptIdA(_ptIdA), ptIdB(_ptIdB), loc(Loc::None) {
 
         double ptA[3], ptB[3];
 
@@ -2505,14 +2534,14 @@ public:
             if (ang > eps) {
                 if (cong > eps) {
                     // normalen sind gleich ausgerichtet
-                    return Congr::EQUAL;
+                    return Congr::Equal;
                 } else {
-                    return Congr::OPPOSITE;
+                    return Congr::Opposite;
                 }
             }
         }
 
-        return Congr::NOT;
+        return Congr::Not;
     }
 
 };
@@ -2535,42 +2564,42 @@ public:
                   << ", cB " << cB
                   << std::endl;
 
-        if (cA != Congr::NOT || cB != Congr::NOT) {
+        if (cA != Congr::Not || cB != Congr::Not) {
             assert(cA != cB);
         }
 
 #endif
 
-        if (cA == Congr::EQUAL || cA == Congr::OPPOSITE) {
-            if (cA == Congr::OPPOSITE) {
+        if (cA == Congr::Equal || cA == Congr::Opposite) {
+            if (cA == Congr::Opposite) {
                 // normalen sind entgegengesetzt gerichtet
 
                 if (mode == OPER_INTERSECTION) {
-                    pA.loc = Loc::OUTSIDE;
-                    pT.loc = Loc::OUTSIDE;
+                    pA.loc = Loc::Outside;
+                    pT.loc = Loc::Outside;
                 } else {
-                    pA.loc = Loc::INSIDE;
-                    pT.loc = Loc::INSIDE;
+                    pA.loc = Loc::Inside;
+                    pT.loc = Loc::Inside;
                 }
             } else if (mode == OPER_UNION || mode == OPER_INTERSECTION) {
-                pA.loc = Loc::INSIDE;
-                pT.loc = Loc::OUTSIDE;
+                pA.loc = Loc::Inside;
+                pT.loc = Loc::Outside;
             }
 
-        } else if (cB == Congr::EQUAL || cB == Congr::OPPOSITE) {
-            if (cB == Congr::OPPOSITE) {
+        } else if (cB == Congr::Equal || cB == Congr::Opposite) {
+            if (cB == Congr::Opposite) {
                 // normalen sind entgegengesetzt gerichtet
 
                 if (mode == OPER_INTERSECTION) {
-                    pB.loc = Loc::OUTSIDE;
-                    pT.loc = Loc::OUTSIDE;
+                    pB.loc = Loc::Outside;
+                    pT.loc = Loc::Outside;
                 } else {
-                    pB.loc = Loc::INSIDE;
-                    pT.loc = Loc::INSIDE;
+                    pB.loc = Loc::Inside;
+                    pT.loc = Loc::Inside;
                 }
             } else if (mode == OPER_UNION || mode == OPER_INTERSECTION) {
-                pB.loc = Loc::INSIDE;
-                pT.loc = Loc::OUTSIDE;
+                pB.loc = Loc::Inside;
+                pT.loc = Loc::Outside;
             }
 
         } else {
@@ -2578,9 +2607,9 @@ public:
                 beta = GetAngle(pA.r, pT.r, pA.e);
 
             if (beta > alpha) {
-                pT.loc = Loc::INSIDE;
+                pT.loc = Loc::Inside;
             } else {
-                pT.loc = Loc::OUTSIDE;
+                pT.loc = Loc::Outside;
             }
         }
     }
@@ -2714,10 +2743,7 @@ bool vtkPolyDataBooleanFilter::CombineRegions () {
     vtkPolyData *pdB = cfB->GetOutput();
 
 #ifdef DEBUG
-    std::cout << "Exporting modPdA_8.vtk" << std::endl;
     WriteVTK("modPdA_8.vtk", pdA);
-
-    std::cout << "Exporting modPdB_8.vtk" << std::endl;
     WriteVTK("modPdB_8.vtk", pdB);
 #endif
 
@@ -2853,8 +2879,6 @@ bool vtkPolyDataBooleanFilter::CombineRegions () {
 
         } else {
             _failed.push_back(i);
-
-            // return true;
         }
 
     }
@@ -2872,15 +2896,15 @@ bool vtkPolyDataBooleanFilter::CombineRegions () {
 
     // reale kombination der ermittelten regionen
 
-    Loc comb[] = {Loc::OUTSIDE, Loc::OUTSIDE};
+    Loc comb[] = {Loc::Outside, Loc::Outside};
 
     if (OperMode == OPER_INTERSECTION) {
-        comb[0] = Loc::INSIDE;
-        comb[1] = Loc::INSIDE;
+        comb[0] = Loc::Inside;
+        comb[1] = Loc::Inside;
     } else if (OperMode == OPER_DIFFERENCE) {
-        comb[1] = Loc::INSIDE;
+        comb[1] = Loc::Inside;
     } else if (OperMode == OPER_DIFFERENCE2) {
-        comb[0] = Loc::INSIDE;
+        comb[0] = Loc::Inside;
     }
 
     vtkIdType numA = cfA->GetNumberOfExtractedRegions(),
@@ -2938,7 +2962,7 @@ bool vtkPolyDataBooleanFilter::CombineRegions () {
         vtkIdType cellId;
         vtkIdList *ptIds;
 
-        if (comb[0] == Loc::INSIDE) {
+        if (comb[0] == Loc::Inside) {
             cellItr = regsA->NewCellIterator();
 
             for (cellItr->InitTraversal(); !cellItr->IsDoneWithTraversal(); cellItr->GoToNextCell()) {
@@ -2953,7 +2977,7 @@ bool vtkPolyDataBooleanFilter::CombineRegions () {
             cellItr->Delete();
         }
 
-        if (comb[1] == Loc::INSIDE) {
+        if (comb[1] == Loc::Inside) {
             cellItr = regsB->NewCellIterator();
 
             for (cellItr->InitTraversal(); !cellItr->IsDoneWithTraversal(); cellItr->GoToNextCell()) {
@@ -3064,845 +3088,60 @@ bool vtkPolyDataBooleanFilter::CombineRegions () {
 
 }
 
-Merger::Merger (vtkPolyData *pd, const PStrips &pStrips, const StripsType &strips, const IdsType &descIds, vtkIdType origId) : pd(pd), pStrips(pStrips), origId(origId) {
-
-    const StripPtsType &pts = pStrips.pts;
-    const Base &base = pStrips.base;
-
-    vtkIdType i, num;
-    const vtkIdType *cell;
-
-    double pt[3];
-
-    for (auto id : descIds) {
-        pd->GetCellPoints(id, num, cell);
-
-        Poly p;
-
-        for (i = 0; i < num; i++) {
-            pd->GetPoint(cell[i], pt);
-
-            double proj[2];
-            Transform(pt, proj, base);
-
-            p.emplace_back(proj[0], proj[1], 0, cell[i]);
-
-        }
-
-        polys.push_back(p);
-
-        pd->DeleteCell(id);
-    }
-
-    for (auto &strip : strips) {
-        Poly p;
-
-        for (auto &sp : strip) {
-            const double *pt = pts.at(sp.ind).pt;
-
-            double proj[2];
-            Transform(pt, proj, base);
-
-            p.emplace_back(proj[0], proj[1], 0);
-        }
-
-        p.pop_back();
-
-        double n[3];
-        ComputeNormal(p, n);
-
-        if (n[2] < 0) {
-            Poly q(p.rbegin(), p.rend());
-            p.swap(q);
-        }
-
-        innerIds.push_back(polys.size());
-
-        polys.push_back(p);
-    }
-
-}
-
-void Merger::Run () {
-    // mergen mit hilfe von vtkKdTree und vtkModifiedBSPTree
-
-    vtkPoints *pdPts = pd->GetPoints();
-    vtkIdTypeArray *origCellIds = vtkIdTypeArray::SafeDownCast(pd->GetCellData()->GetScalars("OrigCellIds"));
-
-    assert(origCellIds != nullptr);
-
-    const Base &base = pStrips.base;
-
-    std::vector<GroupType> groups(polys.size());
-
-    PolysType::const_iterator itrA, itrB;
-
-    std::size_t i {0};
-
-    for (itrA = polys.begin(); itrA != polys.end(); ++itrA) {
-        if (std::find(innerIds.begin(), innerIds.end(), i) != innerIds.end()) {
-            std::size_t j {0};
-            for (itrB = polys.begin(); itrB != polys.end(); ++itrB) {
-                if (itrA != itrB && PointInPoly(*itrB, *itrA->begin())) {
-                    groups[j].push_back(i);
-                }
-                j++;
-            }
-        }
-        i++;
-    }
-
-    std::size_t parent = 0;
-
-    for (auto &group : groups) {
-        GroupType parents;
-
-        for (auto &index : group) {
-            const GroupType &_group = groups[index];
-            parents.insert(parents.end(), _group.begin(), _group.end());
-        }
-
-        std::sort(group.begin(), group.end());
-        std::sort(parents.begin(), parents.end());
-
-        GroupType _group {parent++};
-        std::set_difference(group.begin(), group.end(), parents.begin(), parents.end(), std::back_inserter(_group));
-
-#ifdef DEBUG
-        std::cout << "[";
-        for (auto &index : _group) {
-            std::cout << index << ", ";
-        }
-        std::cout << "]" << std::endl;
-#endif
-
-        PolysType merged;
-
-        MergeGroup(_group, merged);
-
-        std::map<Point3d, vtkIdType> newIds;
-
-        for (auto &poly : merged) {
-            auto newCell = vtkSmartPointer<vtkIdList>::New();
-
-            for (auto &p : poly) {
-                double in[] = {p.x, p.y},
-                    out[3];
-
-                BackTransform(in, out, base);
-
-                vtkIdType id = p.id;
-
-                if (id == NOTSET) {
-                    auto itr = newIds.find(p);
-
-                    if (itr == newIds.end()) {
-                        id = pdPts->InsertNextPoint(out);
-                        newIds.emplace(p, id);
-                    } else {
-                        id = itr->second;
-                    }
-                }
-
-                newCell->InsertNextId(id);
-
-            }
-
-            pd->InsertNextCell(VTK_POLYGON, newCell);
-            origCellIds->InsertNextValue(origId);
-        }
-
-    }
-
-}
-
-void Merger::MergeGroup (const GroupType &group, PolysType &merged) {
-    if (group.size() == 1) {
-        merged.push_back(polys.at(group.back()));
-
+void vtkPolyDataBooleanFilter::SetMatrix (int i, vtkMatrix4x4 *matrix) {
+    if (i != 0 && i != 1) {
         return;
     }
 
-    auto pts = vtkSmartPointer<vtkPoints>::New();
-
-    IndexedPolysType indexedPolys;
-
-    ReferencedPointsType refPts;
-
-    SourcesType sources;
-    std::size_t src = 0;
-
-    for (auto &index : group) {
-        const Poly &poly = polys.at(index);
-
-        IndexedPoly ids;
-
-        for (auto &p : poly) {
-            vtkIdType id = pts->InsertNextPoint(p.x, p.y, p.z);
-
-            ids.push_back(id);
-            sources.emplace(id, src);
-
-            refPts.emplace(id, p);
-        }
-
-        indexedPolys.push_back(std::move(ids));
-        src++;
+    if (matrices[i] == matrix) {
+        return;
     }
 
-    auto kdTree = vtkSmartPointer<vtkKdTree>::New();
-    kdTree->OmitZPartitioning();
-    kdTree->BuildLocatorFromPoints(pts);
-
-    auto linesA = vtkSmartPointer<vtkPolyData>::New();
-    linesA->SetPoints(pts);
-    linesA->Allocate(1);
-
-    IndexedPoly::const_iterator itrA, itrB;
-
-    for (const auto &ids : indexedPolys) {
-        for (itrA = ids.begin(); itrA != ids.end(); ++itrA) {
-            itrB = itrA+1;
-            if (itrB == ids.end()) {
-                itrB = ids.begin();
-            }
-
-            vtkIdList *line = vtkIdList::New();
-            line->InsertNextId(*itrA);
-            line->InsertNextId(*itrB);
-
-            linesA->InsertNextCell(VTK_LINE, line);
-
-            line->Delete();
-        }
+    if (transforms[i] != nullptr) {
+        transforms[i]->Delete();
+        transforms[i] = nullptr;
     }
 
-#ifdef DEBUG
-    WriteVTK("linesA.vtk", linesA);
-#endif
-
-    auto bspTreeA = vtkSmartPointer<vtkModifiedBSPTree>::New();
-    bspTreeA->SetDataSet(linesA);
-
-    int n = 0;
-
-    PolyConnsType polyConns;
-
-    FindConns(linesA, kdTree, bspTreeA, polyConns, indexedPolys, sources, n);
-
-    PolyConnsType connected {{0, {}}};
-    _IdsType restricted; // keine der conns darf im gleichen punkt beginnen
-
-    auto linesB = vtkSmartPointer<vtkPolyData>::New();
-    linesB->SetPoints(pts);
-    linesB->Allocate(1);
-
-    auto bspTreeB = vtkSmartPointer<vtkModifiedBSPTree>::New();
-    bspTreeB->SetDataSet(linesB);
-
-    ConnsType firstConns;
-
-    std::size_t i, numPolys = indexedPolys.size();
-
-    double ptA[3], ptB[3];
-
-    while (connected.size() < numPolys) {
-
-        bool foundOne = false;
-
-        for (i = 1; i < numPolys; i++) {
-            if (connected.count(i) == 0) {
-                const ConnsType &conns = polyConns[i];
-
-                for (auto &conn : conns) {
-                    if (connected.count(sources.at(conn.j)) == 1
-                        && restricted.count(conn.j) == 0) {
-
-                        pts->GetPoint(conn.i, ptA);
-                        pts->GetPoint(conn.j, ptB);
-
-                        if (bspTreeB->IntersectWithLine(ptA, ptB, 1e-5, nullptr, nullptr) == 0) {
-                            connected[sources.at(conn.i)].push_back(conn);
-
-                            // das andere poly auch aktualisieren
-                            connected[sources.at(conn.j)].emplace_back(conn.d, conn.j, conn.i);
-
-                            restricted.insert(conn.i);
-                            restricted.insert(conn.j);
-
-                            vtkIdList *line = vtkIdList::New();
-                            line->InsertNextId(conn.i);
-                            line->InsertNextId(conn.j);
-
-                            linesB->InsertNextCell(VTK_LINE, line);
-
-                            line->Delete();
-
-                            bspTreeB->Modified();
-
-                            foundOne = true;
-
-                            firstConns.push_back(conn);
-
-                            break;
-                        }
-
-                    }
-                }
-            }
-        }
-
-        if (!foundOne) {
-            if (!FindConns(linesA, kdTree, bspTreeA, polyConns, indexedPolys, sources, n)) {
-                throw std::runtime_error("Merging failed.");
-            }
-        }
+    if (matrices[i] != nullptr) {
+        matrices[i]->Delete();
+        matrices[i] = nullptr;
     }
 
-    std::map<std::size_t, std::vector<std::size_t>> chains;
+    if (matrix != nullptr) {
+        matrices[i] = matrix;
+        matrix->Register(this);
 
-    PolyConnsType::const_iterator itrC;
+        auto transform = vtkMatrixToLinearTransform::New();
 
-    for (itrC = connected.begin(); itrC != connected.end(); ++itrC) {
-        auto &chain = chains[itrC->first];
-        chain.push_back(itrC->first);
+        transform->Register(this);
+        transform->Delete();
 
-        while (chain.back() != 0) {
-            chain.push_back(sources.at(connected.at(chain.back()).front().j));
-        }
+        transform->SetInput(matrix);
+
+        transforms[i] = transform;
     }
 
-#ifdef DEBUG
-    std::cout << connected;
-
-    decltype(chains)::const_iterator itrD;
-
-    for (itrD = chains.begin(); itrD != chains.end(); ++itrD) {
-        std::cout << itrD->first << ": [";
-        for (auto &id : itrD->second) {
-            std::cout << id << ", ";
-        }
-        std::cout << "]" << std::endl;
-    }
-#endif
-
-    std::set<std::size_t> solved {0};
-
-    std::deque<std::size_t> searchInds;
-
-    for (i = 1; i < numPolys; i++) {
-        if (connected.at(i).size() == 1) {
-            searchInds.push_back(i);
-        }
-    }
-
-    while (!searchInds.empty()) {
-        PriosType prios;
-
-        for (auto ind : searchInds) {
-            PolyPriosType polyPrios;
-
-#ifdef DEBUG
-            std::cout << "ind " << ind << std::endl;
-#endif
-
-            const Conn &first = connected.at(ind).back();
-
-            for (auto &conn : polyConns.at(ind)) {
-                auto &src = sources.at(conn.j);
-
-                if (polyPrios.count(src) == 1) {
-                    continue;
-                }
-
-                if (conn.i != first.i
-                    && conn.j != first.j
-                    && restricted.count(conn.i) == 0
-                    && restricted.count(conn.j) == 0) {
-
-                    pts->GetPoint(conn.i, ptA);
-                    pts->GetPoint(conn.j, ptB);
-
-                    if (bspTreeB->IntersectWithLine(ptA, ptB, 1e-5, nullptr, nullptr) == 0) {
-                        auto &chainA = chains.at(ind),
-                            &chainB = chains.at(src);
-
-                        std::set<std::size_t> _chainA(chainA.begin(), chainA.end()),
-                            _chainB(chainB.begin(), chainB.end());
-
-                        // gemeinsame eltern
-                        std::set<std::size_t> shared;
-
-                        std::set_intersection(_chainA.begin(), _chainA.end(), _chainB.begin(), _chainB.end(), std::inserter(shared, shared.end()));
-
-                        // gemeinsame eltern müssen sich alle in solved befinden
-                        if (std::includes(solved.begin(), solved.end(), shared.begin(), shared.end())) {
-                            std::set<std::size_t> solvable;
-
-                            std::set_difference(_chainA.begin(), _chainA.end(), solved.begin(), solved.end(), std::inserter(solvable, solvable.end()));
-                            std::set_difference(_chainB.begin(), _chainB.end(), solved.begin(), solved.end(), std::inserter(solvable, solvable.end()));
-
-                            polyPrios.emplace(std::piecewise_construct,
-                                std::forward_as_tuple(src),
-                                std::forward_as_tuple(conn, solvable, -conn.d));
-                        }
-                    }
-                }
-            }
-
-            PolyPriosType::const_iterator itr;
-            for (itr = polyPrios.begin(); itr != polyPrios.end(); ++itr) {
-                prios.insert(itr->second);
-            }
-        }
-
-        if (!prios.empty()) {
-            auto &prio = *prios.rbegin();
-
-#ifdef DEBUG
-            std::cout << "found " << prio << std::endl;
-#endif
-
-            auto &conns = connected.at(sources.at(prio.conn.i));
-
-            conns.push_back(prio.conn);
-
-            connected.at(sources.at(prio.conn.j)).emplace_back(prio.conn.d, prio.conn.j, prio.conn.i);
-
-            restricted.insert(prio.conn.i);
-            restricted.insert(prio.conn.j);
-
-            vtkIdList *line = vtkIdList::New();
-            line->InsertNextId(prio.conn.i);
-            line->InsertNextId(prio.conn.j);
-
-            linesB->InsertNextCell(VTK_LINE, line);
-
-            line->Delete();
-
-            bspTreeB->Modified();
-
-            solved.insert(prio.solvable.begin(), prio.solvable.end());
-
-            searchInds.erase(std::find(searchInds.begin(), searchInds.end(), sources.at(prio.conn.i)));
-
-            auto itr = std::find(searchInds.begin(), searchInds.end(), sources.at(prio.conn.j));
-
-            if (itr != searchInds.end()) {
-                searchInds.erase(itr);
-            }
-        } else {
-            if (!FindConns(linesA, kdTree, bspTreeA, polyConns, indexedPolys, sources, n)) {
-                break;
-            }
-        }
-    }
-
-#ifdef DEBUG
-    std::cout << connected;
-#endif
-
-    // fallback
-
-    double pt[3];
-
-    if (!searchInds.empty()) {
-        for (auto ind : searchInds) {
-            std::vector<std::size_t> newChain;
-
-            for (auto c : chains.at(ind)) {
-                if (solved.find(c) != solved.end()) {
-                    break;
-                }
-
-                newChain.push_back(c);
-            }
-
-            ConnsType &conns = connected.at(ind);
-
-            decltype(newChain)::const_reverse_iterator itr;
-
-            for (itr = newChain.rbegin(); itr != newChain.rend(); itr++) {
-                // gesucht ist hier die kürzeste verbindung
-
-#ifdef DEBUG
-                std::cout << "itr " << *itr << std::endl;
-#endif
-
-                // polyConns.at(*itr) ist nach d sortiert
-
-                std::shared_ptr<Conn> found;
-
-                for (auto &conn : polyConns.at(*itr)) {
-                    auto &src = sources.at(conn.j);
-
-                    if (solved.find(src) != solved.end()) {
-                        if (restricted.count(conn.i) == 0
-                            // && restricted.count(conn.j) == 0
-                            && std::find_if(conns.begin(), conns.end(), [&conn](const Conn &other) { return conn.i == other.i || conn.j == other.j; }) == conns.end()) {
-
-                            pts->GetPoint(conn.i, ptA);
-                            pts->GetPoint(conn.j, ptB);
-
-                            auto intersPts = vtkSmartPointer<vtkPoints>::New();
-
-                            auto c = bspTreeB->IntersectWithLine(ptA, ptB, 1e-5, intersPts, nullptr);
-
-                            if (c == 0) {
-                                found = std::make_shared<Conn>(conn);
-
-                                break;
-                            }
-
-                            // wenn schnittpunkte existieren, dann müssen alle mit ptB übereinstimmen
-
-                            vtkIdType i, numPts = intersPts->GetNumberOfPoints();
-
-                            std::set<Point3d> foundPts {{ptB[0], ptB[1], ptB[2]}};
-
-                            for (i = 0; i < numPts; i++) {
-                                intersPts->GetPoint(i, pt);
-                                foundPts.emplace(pt[0], pt[1], pt[2]);
-                            }
-
-                            if (foundPts.size() == 1) {
-                                found = std::make_shared<Conn>(conn);
-
-                                break;
-                            }
-
-                        }
-                    }
-                }
-
-                if (found) {
-#ifdef DEBUG
-                    std::cout << "found " << *found << std::endl;
-#endif
-
-                    conns.push_back(*found);
-
-                    connected.at(sources.at(found->j)).emplace_back(found->d, found->j, found->i);
-
-                    restricted.insert(found->i);
-                    restricted.insert(found->j);
-
-                    vtkIdList *line = vtkIdList::New();
-                    line->InsertNextId(found->i);
-                    line->InsertNextId(found->j);
-
-                    linesB->InsertNextCell(VTK_LINE, line);
-
-                    line->Delete();
-
-                    bspTreeB->Modified();
-
-                    solved.insert(*itr);
-
-                } else {
-                    throw std::runtime_error("Merging failed.");
-                }
-
-            }
-        }
-    }
-
-#ifdef DEBUG
-    WriteVTK("linesB.vtk", linesB);
-#endif
-
-    ConnsType2 usedConns(firstConns.begin(), firstConns.end());
-
-    IndexedPoly polyA {indexedPolys.front()};
-
-    MergeStage1(indexedPolys, refPts, sources, firstConns, polyA);
-
-    IndexedPolysType splitted {polyA};
-
-    ConnsType2 leftConns;
-
-    for (itrC = connected.begin(); itrC != connected.end(); ++itrC) {
-        if (itrC->first == 0) {
-            continue;
-        }
-
-        auto &conns = itrC->second;
-
-        ConnsType::const_iterator itr;
-
-        for (itr = conns.begin()+1; itr != conns.end(); ++itr) {
-            Conn conn(0, itr->j, itr->i);
-
-            if (usedConns.find(conn) == usedConns.end()) {
-                if (itr->i < itr->j) {
-                    leftConns.emplace(0, itr->i, itr->j);
-                } else {
-                    leftConns.insert(std::move(conn));
-                }
-            }
-        }
-
-    }
-
-#ifdef DEBUG
-    std::cout << "leftConns: [";
-    for (auto &conn : leftConns) {
-        std::cout << conn << ", ";
-    }
-    std::cout << "]" << std::endl;
-#endif
-
-    MergeStage2(leftConns, refPts, usedConns, splitted);
-
-    PolysType newPolys;
-    GetPolys(refPts, splitted, newPolys);
-
-#ifdef DEBUG
-    WritePolys("merged_stage2.vtk", newPolys);
-#endif
-
-    std::move(newPolys.begin(), newPolys.end(), std::back_inserter(merged));
-
+    Modified();
 }
 
-bool Merger::FindConns (vtkPolyData *lines, vtkSmartPointer<vtkKdTree> kdTree, vtkSmartPointer<vtkModifiedBSPTree> bspTree, PolyConnsType &polyConns, const IndexedPolysType &indexedPolys, const SourcesType &sources, int &n) {
-
-    vtkPoints *pts = lines->GetPoints();
-
-    if (n > pts->GetNumberOfPoints()) {
-        return false;
+vtkMatrix4x4* vtkPolyDataBooleanFilter::GetMatrix (int i) {
+    if (i != 0 && i != 1) {
+        return nullptr;
     }
 
-    n += 10;
-
-    auto foundPts = vtkSmartPointer<vtkIdList>::New();
-
-    vtkIdType i, numPts;
-
-    vtkIdType idB;
-
-    auto lineIds = vtkSmartPointer<vtkIdList>::New();
-
-    double ptA[3], ptB[3];
-
-    bool good;
-
-    vtkIdType j;
-    vtkIdType _idA, _idB;
-
-    std::map<std::size_t, std::set<Conn, ConnCmp>> _polyConns;
-
-    auto line = vtkSmartPointer<vtkIdList>::New();
-
-    for (const auto &ids : indexedPolys) {
-        for (vtkIdType idA : ids) {
-            pts->GetPoint(idA, ptA);
-
-            kdTree->FindClosestNPoints(n, ptA, foundPts);
-
-            numPts = foundPts->GetNumberOfIds();
-
-            for (i = 0; i < numPts; i++) {
-                idB = foundPts->GetId(i);
-
-                auto srcA = sources.at(idA),
-                    srcB = sources.at(idB);
-
-                if (srcA == srcB) {
-                    continue;
-                }
-
-                pts->GetPoint(idB, ptB);
-
-                good = true;
-
-                if (bspTree->IntersectWithLine(ptA, ptB, 1e-5, nullptr, lineIds) == 1) {
-                    for (j = 0; j < lineIds->GetNumberOfIds(); j++) {
-                        lines->GetCellPoints(lineIds->GetId(j), line);
-
-                        _idA = line->GetId(0);
-                        _idB = line->GetId(1);
-
-                        if (_idA != idA && _idA != idB
-                            && _idB != idA && _idB != idB) {
-
-                            good = false;
-                            break;
-                        }
-                    }
-                }
-
-                if (good) {
-                    double d = vtkMath::Distance2BetweenPoints(ptA, ptB);
-
-                    _polyConns[srcA].emplace(d, idA, idB);
-                    _polyConns[srcB].emplace(d, idB, idA);
-                }
-            }
-        }
-    }
-
-    decltype(_polyConns)::const_iterator itr;
-
-    for (itr = _polyConns.begin(); itr != _polyConns.end(); ++itr) {
-        auto &_conns = itr->second;
-
-        ConnsType conns(_conns.begin(), _conns.end());
-        std::sort(conns.begin(), conns.end());
-
-        polyConns[itr->first].swap(conns);
-
-    }
-
-    return true;
+    return matrices[i];
 }
 
-void Merger::MergeStage1 (const IndexedPolysType &indexedPolys, [[maybe_unused]] const ReferencedPointsType &refPts, const SourcesType &sources, const ConnsType &conns, IndexedPoly &polyA) {
+vtkMTimeType vtkPolyDataBooleanFilter::GetMTime () {
+    std::vector<vtkMTimeType> times = { MTime.GetMTime() };
 
-    for (const auto &conn : conns) {
-        auto itrA = std::find(polyA.begin(), polyA.end(), conn.j);
-
-        assert(itrA != polyA.end());
-
-        IndexedPoly polyB(indexedPolys.at(sources.at(conn.i)));
-
-        auto itrB = std::find(polyB.begin(), polyB.end(), conn.i);
-
-        assert(itrB != polyB.end());
-
-        std::rotate(polyA.begin(), itrA, polyA.end());
-        std::rotate(polyB.begin(), itrB, polyB.end());
-
-        IndexedPoly newPoly {polyA};
-        newPoly.push_back(polyA.front());
-        newPoly.push_back(polyB.front());
-
-        newPoly.insert(newPoly.end(), polyB.rbegin(), polyB.rend());
-
-        polyA.swap(newPoly);
-
+    if (matrices[0] != nullptr) {
+        times.push_back(matrices[0]->GetMTime());
     }
 
-#ifdef DEBUG
-    PolysType newPolys;
-    GetPolys(refPts, {polyA}, newPolys);
-
-    WritePolys("merged_stage1.vtk", newPolys);
-#endif
-
-}
-
-void Merger::MergeStage2 (const ConnsType2 &conns, const ReferencedPointsType &refPts, const ConnsType2 &usedConns, IndexedPolysType &splitted) {
-    std::set<Point3d> endPts;
-
-    for (const Conn &conn : usedConns) {
-        endPts.emplace(refPts.at(conn.i));
-        endPts.emplace(refPts.at(conn.j));
+    if (matrices[1] != nullptr) {
+        times.push_back(matrices[1]->GetMTime());
     }
 
-    IndexedPolysType::iterator itr;
-
-    double vA[3], vB[3], w[3], ang, phi;
-
-    const double n[] = {0, 0, 1};
-
-    IndexedPoly::iterator itrA, itrB;
-
-    IndexedPoly::iterator prev, next;
-
-    for (auto &conn : conns) {
-        for (itr = splitted.begin(); itr != splitted.end(); ++itr) {
-            IndexedPoly poly(itr->begin(), itr->end());
-
-            if (endPts.count(refPts.at(conn.i)) == 0)  {
-                itrA = std::find(poly.begin(), poly.end(), conn.i);
-            } else {
-                Point3d::GetVec(refPts.at(conn.i), refPts.at(conn.j), w);
-
-                itrA = poly.begin();
-                while ((itrA = std::find(itrA, poly.end(), conn.i)) != poly.end()) {
-                    next = itrA+1;
-                    if (next == poly.end()) {
-                        next = poly.begin();
-                    }
-
-                    if (itrA == poly.begin()) {
-                        prev = poly.end()-1;
-                    } else {
-                        prev = itrA-1;
-                    }
-
-                    Point3d::GetVec(refPts.at(conn.i), refPts.at(*next), vA);
-                    Point3d::GetVec(refPts.at(conn.i), refPts.at(*prev), vB);
-
-                    ang = GetAngle(vA, vB, n);
-                    phi = GetAngle(vA, w, n);
-
-                    if (phi < ang) {
-                        break;
-                    }
-
-                    ++itrA;
-                }
-            }
-
-            if (itrA == poly.end()) {
-                continue;
-            }
-
-            std::rotate(poly.begin(), itrA, poly.end());
-
-            if (endPts.count(refPts.at(conn.j)) == 0)  {
-                itrB = std::find(poly.begin(), poly.end(), conn.j);
-            } else {
-                Point3d::GetVec(refPts.at(conn.j), refPts.at(conn.i), w);
-
-                itrB = poly.begin();
-                while ((itrB = std::find(itrB, poly.end(), conn.j)) != poly.end()) {
-                    next = itrB+1;
-                    if (next == poly.end()) {
-                        next = poly.begin();
-                    }
-
-                    if (itrB == poly.begin()) {
-                        prev = poly.end()-1;
-                    } else {
-                        prev = itrB-1;
-                    }
-
-                    Point3d::GetVec(refPts.at(conn.j), refPts.at(*next), vA);
-                    Point3d::GetVec(refPts.at(conn.j), refPts.at(*prev), vB);
-
-                    ang = GetAngle(vA, vB, n);
-                    phi = GetAngle(vA, w, n);
-
-                    if (phi < ang) {
-                        break;
-                    }
-
-                    ++itrB;
-                }
-            }
-
-            if (itrB == poly.end()) {
-                continue;
-            }
-
-            IndexedPoly newPolyA(poly.begin(), itrB+1);
-            IndexedPoly newPolyB(itrB, poly.end());
-
-            newPolyB.push_back(poly.front());
-
-            splitted.erase(itr);
-
-            splitted.push_back(std::move(newPolyA));
-            splitted.push_back(std::move(newPolyB));
-
-            endPts.emplace(refPts.at(conn.i));
-            endPts.emplace(refPts.at(conn.j));
-
-            break;
-        }
-    }
-
+    return *std::max_element(times.begin(), times.end());
 }

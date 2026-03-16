@@ -112,6 +112,8 @@ class LightsWidget(ScriptedLoadableModuleWidget):
     self.ui.shadowsVisibilityCheckBox.connect('toggled(bool)', lambda value: self.logic.setUseSSAO(value))
     self.ui.ambientShadowsSizeScaleSliderWidget.connect('valueChanged(double)', lambda value: self.logic.setAmbientShadowsSizeScale(value))
     self.ui.ambientShadowsVolumeOpacityThresholdPercentSliderWidget.connect('valueChanged(double)', lambda value: self.logic.setAmbientShadowsVolumeOpacityThreshold(value*0.01))
+    self.ui.ambientShadowsIntensityScaleSliderWidget.connect('valueChanged(double)', lambda value: self.logic.setAmbientShadowsIntensityScale(value*0.01))
+    self.ui.ambientShadowsIntensityShiftSliderWidget.connect('valueChanged(double)', lambda value: self.logic.setAmbientShadowsIntensityShift(value*0.01))
 
     self.ui.adaptiveRenderingQualityCheckBox.connect('toggled(bool)', self.logic.setAdaptiveRenderingQuality)
 
@@ -299,6 +301,14 @@ class LightsWidget(ScriptedLoadableModuleWidget):
       self.ui.shadowsVisibilityCheckBox.checked = self.logic.shadowsVisibility
       self.ui.ambientShadowsSizeScaleSliderWidget.value = self.logic.ambientShadowsSizeScale
       self.ui.ambientShadowsVolumeOpacityThresholdPercentSliderWidget.value = self.logic.ambientShadowsVolumeOpacityThreshold*100
+      if hasattr(slicer.vtkMRMLViewNode, "SetAmbientShadowsIntensityScale"):
+        self.ui.ambientShadowsIntensityScaleSliderWidget.value = self.logic.ambientShadowsIntensityScale*100
+        self.ui.ambientShadowsIntensityShiftSliderWidget.value = self.logic.ambientShadowsIntensityShift*100
+      else:
+        self.ui.ambientShadowsIntensityScaleLabel.hide()
+        self.ui.ambientShadowsIntensityScaleSliderWidget.hide()
+        self.ui.ambientShadowsIntensityShiftLabel.hide()
+        self.ui.ambientShadowsIntensityShiftSliderWidget.hide()
     else:
       self.ui.SSAOCollapsibleButton.hide()
 
@@ -322,10 +332,13 @@ class LightsLogic(ScriptedLoadableModuleLogic):
     self.lightkitObserverTag = self.lightKit.AddObserver(vtk.vtkCommand.ModifiedEvent, self.onLightkitModified)
 
     self.slicerCoreSupportsShadows = hasattr(slicer.vtkMRMLViewNode, "SetShadowsVisibility")
+    self.slicerCoreSupportsShadowsIntensityShiftScale = hasattr(slicer.vtkMRMLViewNode, "SetAmbientShadowsIntensityScale")
 
     self.shadowsVisibility = True
     self.ambientShadowsSizeScale = 0.3
     self.ambientShadowsVolumeOpacityThreshold = 0.25
+    self.ambientShadowsIntensityScale = 1.0
+    self.ambientShadowsIntensityShift = 0.0
 
     self.adaptiveRenderingQuality = True
 
@@ -366,12 +379,16 @@ class LightsLogic(ScriptedLoadableModuleLogic):
     self.requestRender()
 
   def renderWindowFromViewNode(self, viewNode):
-    renderView = None
-    lm = slicer.app.layoutManager()
-    for widgetIndex in range(lm.threeDViewCount):
-      view = lm.threeDWidget(widgetIndex).threeDView()
-      if viewNode == view.mrmlViewNode():
-        return view.renderWindow()
+    if viewNode.IsA("vtkMRMLVirtualRealityViewNode"):
+      # Special case for virtual reality, the view widget is not owned by the layout manager
+      vrViewWidget = slicer.modules.virtualreality.viewWidget()
+      return vrViewWidget.renderWindow()
+    else:
+      lm = slicer.app.layoutManager()
+      for widgetIndex in range(lm.threeDViewCount):
+        view = lm.threeDWidget(widgetIndex).threeDView()
+        if viewNode == view.mrmlViewNode():
+          return view.renderWindow()
     raise ValueError('Selected 3D view is not visible in the current layout.')
 
   def addManagedView(self, viewNode):
@@ -383,6 +400,8 @@ class LightsLogic(ScriptedLoadableModuleLogic):
     self.setUseSSAO(self.shadowsVisibility, viewNode)
     self.setAmbientShadowsSizeScale(self.ambientShadowsSizeScale, viewNode)
     self.setAmbientShadowsVolumeOpacityThreshold(self.ambientShadowsVolumeOpacityThreshold, viewNode)
+    self.setAmbientShadowsIntensityScale(self.ambientShadowsIntensityScale, viewNode)
+    self.setAmbientShadowsIntensityShift(self.ambientShadowsIntensityShift, viewNode)
     self.setAdaptiveRenderingQuality(self.adaptiveRenderingQuality, viewNode)
     self.requestRender(viewNode)
 
@@ -478,6 +497,26 @@ class LightsLogic(ScriptedLoadableModuleLogic):
           renderer.SetSSAOBlur(True)  # reduce noise
           renderer.SetSSAOKernelSize(320)  # larger kernel size reduces noise pattern in the darkened region
           self.requestRender(viewNode)
+
+  def setAmbientShadowsIntensityScale(self, intensityScale, viewNode=None):
+    if viewNode is None:
+      self.ambientShadowsIntensityScale = intensityScale
+      viewNodes = self.managedViewNodes
+    else:
+      viewNodes = [viewNode]
+    for viewNode in viewNodes:
+      if self.slicerCoreSupportsShadowsIntensityShiftScale:
+        viewNode.SetAmbientShadowsIntensityScale(intensityScale)
+
+  def setAmbientShadowsIntensityShift(self, intensityShift, viewNode=None):
+    if viewNode is None:
+      self.ambientShadowsIntensityShift = intensityShift
+      viewNodes = self.managedViewNodes
+    else:
+      viewNodes = [viewNode]
+    for viewNode in viewNodes:
+      if self.slicerCoreSupportsShadowsIntensityShiftScale:
+        viewNode.SetAmbientShadowsIntensityShift(intensityShift)
 
   def setAdaptiveRenderingQuality(self, enable, viewNode=None):
     if viewNode is None:
