@@ -12,10 +12,12 @@ Collection of modules for 3D Slicer, which are already useful, but not finalized
 - Import OCT: Load Topcon OCT image file (`*.fda`).
 - Import Osirix ROI: Load Osirix ROI files as segmentation.
 - Import SliceOmatic: Load SliceOmatic segmentation files.
+- [Interactive Matplotlib](#interactive-matplotlib): interactive Matplotlib figures in module panels, pyplot windows, and the view layout.
 - [Lights](#lights): customize lighting in 3D views.
 - Line Profile: compute and plot image intensity profile along a line.
 - Scene Recorder: record all MRML node change events into a json document.
 - Segment Cross-Section Area: Measure cross-section of a segmentation along one of its axis. Note there are more advanced tools for this now in [Segment Geometry](https://github.com/jmhuie/Slicer-SegmentGeometry) and [SlicerVMTK](https://github.com/vmtk/SlicerExtension-VMTK#the-vmtk-extension-for-3d-slicer) extensions.
+- [Slicey](#slicey): AI chat assistant that uses Slicer and helps develop Slicer modules, by running Python code in Slicer. Works with the Claude API, a Claude or ChatGPT subscription, or your own model on a local LLM server.
 - [Stitch Volumes](#stitch-volumes): stitch together image volumes which share physical coordinate systems (e.g. CT scans with different stations)
 - Style Tester: test Qt style sheet changes.
 - User Statistics: collect statistics about what modules and tools are used and for how long.
@@ -160,7 +162,11 @@ decompositionResults = CharacterizeTransformMatrix.CharacterizeTransformMatrixLo
 
 This module was created by adding a Slicer module wrapper to [vtkbool](https://github.com/zippy84/vtkbool), a library used for more robust boolean operations on vtkPolyData.
 
+The default backend is [kigumi](https://github.com/unageek/kigumi), which computes Boolean operations exactly, so the result does not depend on numerical tolerances. vtkbool can still be selected in the Advanced section of the module. With kigumi, "Add step" combines more than two models in order (e.g., ((A|B)-C)&&D); intermediate results are kept exact, and only the final model is rounded. Building the kigumi backend downloads Boost at configure time; set `CombineModels_USE_KIGUMI=OFF` to build with vtkbool only.
+
 ### If you use this module for your research please address this citation details
+
+Mizuno, M. kigumi [Computer software]. https://github.com/unageek/kigumi
 
 Römer, R. vtkbool (Version 3.2.0) [Computer software]. https://github.com/zippy84/vtkbool
 
@@ -237,3 +243,115 @@ Example module that allows opening a file in 3D Slicer by clicking on a link in 
 Example links that open image and/or segmentation in 3D Slicer:
 - LungCTAnalyzerChestCT image: `slicer://viewer/?download=https%3A%2F%2Fgithub.com%2Frbumm%2FSlicerLungCTAnalyzer%2Freleases%2Fdownload%2FSampleData%2FLungCTAnalyzerChestCT.nrrd`
 - LungCTAnalyzerChestCT image + segmentation" `slicer://viewer/?show3d=true&segmentation=https%3A%2F%2Fgithub.com%2Frbumm%2FSlicerLungCTAnalyzer%2Freleases%2Fdownload%2FSampleData%2FLungCTAnalyzerMaskSegmentation.seg.nrrd&image=https%3A%2F%2Fgithub.com%2Frbumm%2FSlicerLungCTAnalyzer%2Freleases%2Fdownload%2FSampleData%2FLungCTAnalyzerChestCT.nrrd`
+
+## Interactive Matplotlib
+
+Interactive [Matplotlib](https://matplotlib.org/) figures in Slicer: pan, zoom, hover, pick, Matplotlib widgets and animations all work, and figures can be shown in module panels, in their own windows, or in the view layout next to slice views.
+
+Matplotlib's own interactive backends do not work in Slicer: Slicer's Python is built without Tcl/Tk, so `TkAgg` is unavailable, and Slicer binds Qt through PythonQt rather than PyQt or PySide, so `QtAgg` cannot be used either. Installing PyQt or PySide into Slicer's Python would load a second copy of Qt into the process, which is unstable. This module provides two canvases that render with Agg instead:
+
+- **Qt canvas** (`InteractiveMatplotlibLib.backend`): a pyplot backend whose canvas is a Qt widget, driven by Slicer's own event loop. Use it for `plt.show()` windows and to embed a plot in a module panel.
+- **VTK view** (`InteractiveMatplotlibLib.view`): shows a figure in the view layout. The figure is drawn by `InteractiveMatplotlibLib.vtkcanvas.FigureCanvasVTK` into a VTK render view and gets its input and timers from the VTK render window interactor. The canvas does not use Qt, so it can be hosted by any VTK render window, for example in a web browser.
+
+Matplotlib 3.10 or later is required. Install it with the button in the module panel, or with `slicer.packaging.pip_ensure("matplotlib>=3.10")`. The module panel also runs the examples below, and has a *Use as pyplot backend* option that makes the Qt canvas the default pyplot backend at every startup.
+
+![](InteractiveMatplotlib_1.png)
+
+### Interactive pyplot figures
+
+```python
+import slicer.packaging
+slicer.packaging.pip_ensure("matplotlib>=3.10")
+
+# Select the interactive backend and enable interactive mode.
+import InteractiveMatplotlibLib.backend
+InteractiveMatplotlibLib.backend.enable()
+
+import matplotlib.pyplot as plt
+fig, ax = plt.subplots()
+ax.plot([0, 1, 2], [0, 1, 0])
+plt.show()  # returns immediately, Slicer stays responsive
+```
+
+### Plot in a module panel
+
+```python
+from matplotlib.figure import Figure
+from InteractiveMatplotlibLib.backend import FigureCanvasSlicer, NavigationToolbar2Slicer
+
+figure = Figure()
+figure.add_subplot().plot([0, 1, 2], [0, 1, 0])
+
+self.canvas = FigureCanvasSlicer(figure)  # keep a reference while the plot is shown
+toolbar = NavigationToolbar2Slicer(self.canvas)
+self.layout.addWidget(self.canvas.get_widget())
+self.layout.addWidget(toolbar.get_widget())
+```
+
+Call `canvas.draw_idle()` after modifying the figure. Call `canvas.set_size_hint(width, height)` with a small size to let a shared layout drive the size of the plot.
+
+### Plot in the view layout
+
+```python
+from matplotlib.figure import Figure
+import InteractiveMatplotlibLib.view
+
+figure = Figure()
+figure.add_subplot().plot([0, 1, 2], [0, 1, 0])
+canvas = InteractiveMatplotlibLib.view.showFigure(figure)
+```
+
+The view is placed in the layout by a view factory for the custom `<matplotlibview>` layout element, so it can be used in any custom layout description. If the current layout has no such element, `showFigure()` switches to a Four-Up layout with the figure in place of the 3D view (`InteractiveMatplotlibLib.view.FOUR_UP_LAYOUT_ID`). Call `InteractiveMatplotlibLib.view.viewWidget().setFigure(None)` to clear the view.
+
+Use the Qt canvas rather than the VTK view in module panels: every VTK view has its own OpenGL context. The view has no MRML view node, so it is not saved with the scene, and there is one view per layout element name.
+
+### SlicerWeb
+
+The module also runs in [SlicerWeb](https://github.com/lassoan/SlicerWeb) (Slicer in a web browser), which has no Qt. There, only the VTK view is available: the Qt canvas, pyplot windows and the *Use as pyplot backend* option are not. `showFigure()` and `viewWidget()` work the same, but the plot is drawn in a 3D view of the layout (view node singleton tag `matplotlibview`, labeled *Plot*) whose own rendering is hidden while a figure is shown, because SlicerWeb layouts cannot host custom view widgets. Navigate the plot with Matplotlib's keyboard shortcuts (`h`, `p`, `o`, `c`, `v`...) or the *Navigation* section of the module panel. The install button installs Matplotlib from the Pyodide distribution in the background; the seaborn example installs seaborn from PyPI the same way.
+
+### Examples
+
+`InteractiveMatplotlibLib/examples.py` contains the examples that the module panel runs, using the MRHead sample volume:
+
+- `showSliceHistogram()`: histogram of the slice shown in the red slice view, updated while scrolling through slices. Drag over the histogram to set that intensity range as the window/level.
+- `showSegmentStatistics()`: segments MRHead into brain, skull and scalp, and background with built-in Segment Editor effects, computes statistics with the Segment Statistics module, and shows them as a [seaborn](https://seaborn.pydata.org/) dashboard. Requires `seaborn` and `pandas`.
+
+## Slicey
+
+Slicey is an AI chat assistant in a module panel. Ask it to do something in Slicer ("show the CT using volume rendering", "describe what is in the segmentation") or to help you write or fix a module, and it does the work by running Python code in Slicer and by reading and writing files in folders that you share with it.
+
+![](ScreenshotSlicey01.jpg)
+
+### Connection
+
+Choose which agent answers in *Connection* / *Agent*:
+
+- **Claude, Anthropic API key**: the Claude API, paid per token. The key is stored in the operating system's credential store.
+- **Claude subscription (Claude Code login)**: Claude Code on your Claude Pro or Max subscription, with no API costs. Slicey installs the Claude Agent SDK, which includes Claude Code; log in once by running Claude Code in a terminal.
+- **ChatGPT subscription (Codex login)** and **Codex, OpenAI API key**: Codex, which needs [Node.js](https://nodejs.org) and `npm install -g @openai/codex`.
+- **Own model on an Anthropic-compatible server**: an open model running on this or another computer, for example in [LM Studio](https://lmstudio.ai) (`http://127.0.0.1:1234`) or [vLLM](https://docs.vllm.ai) (`http://localhost:8000`). Nothing leaves your network, but small models know much less about Slicer's Python API than Claude, so they need more attempts or fail at harder tasks.
+
+The local agents (Claude Code and Codex) only get Slicey's own tools: they can't run shell commands or access files outside the shared folders, except through code they run in Slicer.
+
+*Model* lists the models that the chosen account or server offers, and *Effort* sets how long the model thinks before answering (*(auto)* leaves it to the model's default).
+
+### Approval
+
+Code that Slicey runs has the same full access to the computer as Slicer's Python console. *Approval* sets when Slicey asks you first:
+
+- **Auto** (default): ask only before actions that a check finds risky, such as deleting files, running other programs, network access, clearing the scene, or overwriting an existing file.
+- **Ask**: ask before every code run and file write.
+- **Accept**: never ask.
+
+When Slicey asks, *Approve* or *Reject* the action below the chat, or click *Switch to auto* to stop being asked about actions that are not risky.
+
+### Execution
+
+- **Run in current Slicer** (default): code runs in this Slicer, on the loaded scene.
+- **Run in separate Slicer instance**: code runs in a separate Slicer with an empty scene, for experiments that should not affect your work.
+
+Slicer stays responsive while Slicey works. If you switch to another module, the status bar shows whether Slicey is still working, with a button to go back to it.
+
+### Chats
+
+Each chat is saved as Markdown in the *Chat log* folder (by default `~/.Slicey`). Open an earlier chat or continue it in *Past chats*. When *Let Slicey look up past chats* is on (default), Slicey can also search earlier chats itself, for example when you refer to earlier work.
